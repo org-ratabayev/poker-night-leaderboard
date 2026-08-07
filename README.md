@@ -26,7 +26,7 @@ simple, the deployment is fully automated, and pull requests are welcome.
 | Frontend | Static HTML/CSS/JS served by the app — **zero npm dependencies** |
 | Tests    | `bun test` (27 tests: auth, permissions, standings, seasons)    |
 | Deploy   | Docker Compose on an Oracle always-free ARM instance + Cloudflare Tunnel |
-| CI/CD    | GitHub Actions (CI on every PR, auto-deploy on push to `main`)  |
+| CI/CD    | None by design — deploys are manual, triggered on demand (Ansible + Docker Compose) |
 
 Zero dependencies means a tiny attack surface, instant builds, and no
 supply-chain surprises.
@@ -86,12 +86,22 @@ ansible-playbook -i inventory.ini playbook.yml --ask-vault-pass
 
 The playbook is idempotent — rerun it to refresh code + restart.
 
-### Automatic deploys
+### Deploying (manual, on demand)
 
-Merging to `main` triggers [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml),
-which runs on the org's self-hosted `ARM64` runner (the same box) and does
-`docker compose up -d --build` in `/srv/poker`. No credentials are stored in
-GitHub — the `.env` lives only on the host. Fork PRs can never trigger it.
+Deployment is **not automated** — it happens explicitly, whenever the host
+says so. Two equivalent ways:
+
+```bash
+# 1) Ansible (bootstrap + refresh, secrets from vault)
+cd deploy/ansible
+ansible-playbook -i inventory.ini playbook.yml --ask-vault-pass
+
+# 2) Direct (same steps the playbook runs)
+ssh ubuntu@<arm-host> "cd /srv/poker && docker compose up -d --build"
+```
+
+Both are idempotent. The `.env` lives only on the host at `/srv/poker/.env`
+and is never in the repository.
 
 ### Cloudflare tunnel / DNS
 
@@ -134,9 +144,11 @@ tunnel ingress config and the DNS record.
 This is a group project — contributions from the poker table are the point.
 
 1. Fork the repo (or just open a branch if you're a collaborator).
-2. Make your change with a test: `bun test` must pass.
-3. Open a PR. CI runs the full suite on every PR.
-4. Merging to `main` deploys automatically to production.
+2. Make your change with a test — run `bun test` locally, it must pass.
+3. Open a PR. (No CI is configured; the maintainer reviews and runs the
+   tests before merging.)
+4. Merges to `main` do **not** auto-deploy — the host deploys explicitly when
+   he decides the change is ready.
 
 Ideas on the roadmap: head-to-head stats, streak tracking, tournament mode
 (2 tables), CSV export, Telegram notifications after each game.
