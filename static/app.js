@@ -113,7 +113,8 @@ function renderStandings() {
 
 function gameRowsHtml() {
   const rows = $("#game-rows");
-  const players = state.players;
+  const players = (state && state.players) || [];
+  if (players.length === 0) return; // no registered players yet — nothing to add a row for
   const n = rows.querySelectorAll(".game-row").length;
   const options = players
     .map((p) => `<option value="${p.id}">${esc(p.name)}</option>`)
@@ -335,8 +336,8 @@ function bindEvents() {
 // --- Boot ---
 
 (async function boot() {
+  state = await api("/api/state"); // must be set BEFORE bindEvents (gameRowsHtml reads state.players)
   bindEvents();
-  state = await api("/api/state");
   render();
 })().catch((err) => {
   console.error(err);
