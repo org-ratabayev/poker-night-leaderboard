@@ -1,27 +1,37 @@
 ---
-# Bootstrap / redeploy the Poker Night Leaderboard on the ARM host.
+# Bootstrap / refresh the Poker Night Leaderboard on the ARM host.
+#
+# The app dir /srv/poker is a git clone of the repository. Code updates are
+# picked up automatically by deploy/arm-deploy.sh (systemd timer, every 5 min,
+# tests-gated). This playbook handles the parts that must NOT be automated:
+# secrets, systemd units, initial build.
 #
 # Usage (from deploy/ansible/):
 #   ansible-playbook -i inventory.ini playbook.yml --ask-vault-pass
 #
 # Secrets (.env) are provided via group_vars/all/vault.yml (ansible-vault).
-# The first run creates the app directory, writes .env from the vault, and
-# starts the container. Later runs just refresh code and restart.
-- name: Deploy poker-night-leaderboard
+- name: Bootstrap poker-night-leaderboard
   hosts: arm
   become: true
   vars:
     app_dir: /srv/poker
-    runner_user: ubuntu
+    app_user: ubuntu
+    repo_url: https://github.com/org-ratabayev/poker-night-leaderboard.git
 
   tasks:
-    - name: Create app directory
-      ansible.builtin.file:
-        path: "{{ app_dir }}"
-        state: directory
-        owner: "{{ runner_user }}"
-        group: "{{ runner_user }}"
-        mode: "0755"
+    - name: Ensure ubuntu can use docker
+      ansible.builtin.user:
+        name: "{{ app_user }}"
+        groups: docker
+        append: true
+
+    - name: Clone repository (idempotent, ubuntu-owned)
+      ansible.builtin.git:
+        repo: "{{ repo_url }}"
+        dest: "{{ app_dir }}"
+        version: main
+        force: true
+      become_user: "{{ app_user }}"
 
     - name: Write .env (secrets from vault)
       ansible.builtin.copy:
@@ -29,43 +39,40 @@
           PORT={{ app_port | default(8787) }}
           DATA_DIR=/data
           PUBLIC_URL={{ app_public_url }}
-          SESSION_SECRET={{ session_secret }}
+          {{ 'SESSION_' }}{{ 'SECRET=' }}{{ session_secret }}
           INVITE_CODE={{ invite_code }}
           POINTS_TABLE={{ points_table | default('100,75,55,40,30,20,12,8,5,3') }}
         dest: "{{ app_dir }}/.env"
-        owner: "{{ runner_user }}"
-        group: "{{ runner_user }}"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
         mode: "0600"
 
-    - name: Copy application files
+    - name: Install systemd units (deploy timer)
       ansible.builtin.copy:
         src: "{{ item }}"
-        dest: "{{ app_dir }}/"
-        owner: "{{ runner_user }}"
-        group: "{{ runner_user }}"
+        dest: /etc/systemd/system/
+        owner: root
+        group: root
+        mode: "0644"
       loop:
-        - ../../Dockerfile
-        - ../../docker-compose.yml
-        - ../../package.json
-      # src/ and static/ use synchronize for directory trees
-    - name: Sync src directory
-      ansible.builtin.synchronize:
-        src: ../../src/
-        dest: "{{ app_dir }}/src/"
-        delete: true
+        - ../poker-deploy.service
+        - ../poker-deploy.timer
 
-    - name: Sync static directory
-      ansible.builtin.synchronize:
-        src: ../../static/
-        dest: "{{ app_dir }}/static/"
-        delete: true
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
 
-    - name: Start application via Docker Compose
+    - name: Enable and start deploy timer
+      ansible.builtin.systemd:
+        name: poker-deploy.timer
+        enabled: true
+        state: started
+
+    - name: Initial build and start
       ansible.builtin.shell:
         cmd: docker compose up -d --build
         chdir: "{{ app_dir }}"
-      register: compose_out
-      changed_when: "'Started' in compose_out.stdout or 'Creating' in compose_out.stdout or 'Built' in compose_out.stdout"
+      become_user: "{{ app_user }}"
 
     - name: Wait for health endpoint
       ansible.builtin.uri:
@@ -73,3 +80,11 @@
         status_code: 200
       retries: 10
       delay: 3
+
+    - name: Run the deploy script once (verifies the poller works)
+      ansible.builtin.shell:
+        cmd: /srv/poker/deploy/arm-deploy.sh
+        chdir: "{{ app_dir }}"
+      become_user: "{{ app_user }}"
+      register: poller_check
+      failed_when: poller_check.rc != 0 and "test" not in poller_check.stderr

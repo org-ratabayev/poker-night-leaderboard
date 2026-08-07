@@ -73,8 +73,9 @@ Browser ──HTTPS──▶ Cloudflare edge ──tunnel──▶ cloudflared (
 
 ### First-time bootstrap
 
-`deploy/ansible/playbook.yml` creates `/srv/poker`, writes `.env` from an
-ansible-vault and starts the container:
+`deploy/ansible/playbook.yml` clones the repo to `/srv/poker`, writes `.env`
+from an ansible-vault, installs the systemd deploy units and starts the
+container:
 
 ```bash
 cd deploy/ansible
@@ -84,24 +85,29 @@ ansible-vault encrypt group_vars/all/vault.yml
 ansible-playbook -i inventory.ini playbook.yml --ask-vault-pass
 ```
 
-The playbook is idempotent — rerun it to refresh code + restart.
+### Deploying (after bootstrap)
 
-### Deploying (manual, on demand)
+Code updates are picked up by `deploy/arm-deploy.sh`, which runs every 5
+minutes via `poker-deploy.timer` on the ARM host:
 
-Deployment is **not automated** — it happens explicitly, whenever the host
-says so. Two equivalent ways:
+1. `git fetch origin main` — exits silently if nothing changed;
+2. if new commits exist → runs `bun test` in a throwaway container;
+3. **only if tests pass** → `docker compose up -d --build`.
+
+A failing test aborts the deploy and the old container keeps running. No
+GitHub Actions, no cloud CI — the box polls the repo itself.
+
+To deploy immediately (skip the 5-minute wait):
 
 ```bash
-# 1) Ansible (bootstrap + refresh, secrets from vault)
-cd deploy/ansible
-ansible-playbook -i inventory.ini playbook.yml --ask-vault-pass
-
-# 2) Direct (same steps the playbook runs)
+systemctl start poker-deploy.service        # on the ARM host
+# or, from anywhere with SSH:
 ssh ubuntu@<arm-host> "cd /srv/poker && docker compose up -d --build"
 ```
 
-Both are idempotent. The `.env` lives only on the host at `/srv/poker/.env`
-and is never in the repository.
+The `.env` lives only on the host at `/srv/poker/.env` and is never in the
+repository; the same holds for the SQLite data in `/srv/poker/data/`
+(git-ignored, untouched by `git reset --hard`).
 
 ### Cloudflare tunnel / DNS
 

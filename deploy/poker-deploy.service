@@ -1,0 +1,11 @@
+[Unit]
+Description=Poker Night Leaderboard auto-deploy (one-shot poll)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Runs as ubuntu: needs read/write on /srv/poker (git clone) and docker access.
+User=ubuntu
+WorkingDirectory=/srv/poker
+ExecStart=/srv/poker/deploy/arm-deploy.sh
