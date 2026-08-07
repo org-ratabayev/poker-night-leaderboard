@@ -1,0 +1,13 @@
+{
+  "name": "poker-night-leaderboard",
+  "version": "1.0.0",
+  "description": "Season-based points leaderboard for poker nights. Zero-dependency Bun app: Bun.serve + bun:sqlite.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "start": "bun src/server.ts",
+    "dev": "bun --watch src/server.ts",
+    "test": "bun test"
+  }
+}

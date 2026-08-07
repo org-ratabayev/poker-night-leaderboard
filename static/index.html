@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Poker Night Leaderboard</title>
+  <link rel="icon" href="/favicon.svg">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-icon">🃏</span>
+      <div>
+        <h1>Poker Night Leaderboard</h1>
+        <div id="season-label" class="season-label"></div>
+      </div>
+    </div>
+    <div id="userbox" class="userbox"></div>
+  </header>
+
+  <main>
+    <!-- Auth -->
+    <section id="auth-view" class="panel hidden">
+      <div class="auth-card">
+        <div class="auth-tabs">
+          <button id="tab-login" class="auth-tab active">Log in</button>
+          <button id="tab-register" class="auth-tab">Register</button>
+        </div>
+        <form id="login-form" autocomplete="on">
+          <label>Name <input id="login-name" type="text" maxlength="30" required></label>
+          <label>Password <input id="login-password" type="password" required></label>
+          <button type="submit" class="primary">Log in</button>
+          <div class="form-error" id="login-error"></div>
+        </form>
+        <form id="register-form" class="hidden" autocomplete="on">
+          <label>Name <input id="reg-name" type="text" maxlength="30" required></label>
+          <label>Password <input id="reg-password" type="password" minlength="8" required></label>
+          <label>Invite code <input id="reg-invite" type="text" required placeholder="Ask the host"></label>
+          <button type="submit" class="primary">Create account</button>
+          <div class="form-error" id="register-error"></div>
+        </form>
+      </div>
+    </section>
+
+    <!-- App -->
+    <section id="app-view" class="hidden">
+      <nav class="tabs">
+        <button data-tab="standings" class="tab active">Standings</button>
+        <button data-tab="games" class="tab">Games</button>
+        <button data-tab="seasons" class="tab">Seasons</button>
+        <button data-tab="players" class="tab">Players</button>
+      </nav>
+
+      <section id="view-standings" class="view active">
+        <div id="champion-banner"></div>
+        <div class="panel">
+          <table class="standings">
+            <thead><tr><th>#</th><th>Player</th><th>Games</th><th class="num">Points</th></tr></thead>
+            <tbody id="standings-body"></tbody>
+          </table>
+          <p class="muted" id="standings-empty">No games recorded yet this season.</p>
+        </div>
+      </section>
+
+      <section id="view-games" class="view">
+        <div class="panel">
+          <h2>Add tonight's results</h2>
+          <p class="muted">Enter players in finishing order — first row = 1st place.</p>
+          <form id="game-form">
+            <div class="form-row">
+              <label>Date <input id="game-date" type="date" required></label>
+              <label>Notes (optional) <input id="game-notes" type="text" maxlength="200" placeholder="e.g. €10 buy-in, 9 players"></label>
+            </div>
+            <div id="game-rows"></div>
+            <div class="form-row">
+              <button type="button" id="add-row" class="ghost">+ Add player</button>
+            </div>
+            <button type="submit" class="primary">Save game</button>
+            <div class="form-error" id="game-error"></div>
+          </form>
+        </div>
+        <div class="panel">
+          <h2>Game history</h2>
+          <div id="game-history"></div>
+        </div>
+      </section>
+
+      <section id="view-seasons" class="view">
+        <div class="panel">
+          <h2>Seasons</h2>
+          <div id="season-list"></div>
+          <form id="season-form" class="hidden">
+            <label>New season name <input id="season-name" type="text" maxlength="60"></label>
+            <label>Prize (optional) <input id="season-prize" type="text" maxlength="200" placeholder="e.g. 🏆 trophy + bragging rights"></label>
+            <button type="submit" class="primary">Create season</button>
+          </form>
+          <div class="form-error" id="season-error"></div>
+        </div>
+      </section>
+
+      <section id="view-players" class="view">
+        <div class="panel">
+          <h2>Players</h2>
+          <div id="player-list"></div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <footer class="muted">Points: 1st=100 · 2nd=75 · 3rd=55 · 4th=40 · 5th=30 · 6th=20 · 7th=12 · 8th=8 · 9th=5 · 10th=3</footer>
+  <script src="/app.js"></script>
+</body>
+</html>

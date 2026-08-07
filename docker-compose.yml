@@ -1,0 +1,24 @@
+# Poker Night Leaderboard — Docker Compose
+#
+# The app binds to the ARM host's *private* IP only (***REMOVED*** = ***REMOVED***).
+# Public access happens exclusively through the Cloudflare tunnel, so no
+# public ports are ever open. Adjust the host IP if the instance's private
+# address changes.
+#
+# Secrets come from `.env` (next to this file on the host). Never commit it.
+services:
+  app:
+    build: .
+    image: poker-night-leaderboard:latest
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "***REMOVED***:8787:8787"
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:8787/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

@@ -1,0 +1,7 @@
+# Vault example — copy to group_vars/all/vault.yml and encrypt with
+# ansible-vault encrypt group_vars/all/vault.yml. Never commit the plaintext.
+---
+app_public_url: https://poker.<domain>
+session_secret: CHANGE_ME
+invite_code: CHANGE_ME
+points_table: 100,75,55,40,30,20,12,8,5,3

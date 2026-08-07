@@ -1,0 +1,17 @@
+# Dependencies (none currently, but future-proof)
+node_modules/
+
+# Runtime data
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Secrets — NEVER commit .env
+.env
+
+# OS/editor noise
+.DS_Store
+*.swp
+.idea/
+.vscode/

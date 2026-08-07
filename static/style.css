@@ -1,0 +1,161 @@
+/* Poker Night Leaderboard — dark felt theme, mobile-first */
+:root {
+  --bg: #0e1510;
+  --panel: #16211a;
+  --panel2: #1c2a22;
+  --felt: #1f5132;
+  --felt-dark: #163d26;
+  --gold: #ffd700;
+  --gold-dark: #b8860b;
+  --text: #e8e6dd;
+  --muted: #93a093;
+  --red: #e05252;
+  --border: #2c3a30;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  min-height: 100%;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.9rem 1.2rem;
+  background: linear-gradient(180deg, #12291c, #0e1510);
+  border-bottom: 2px solid var(--felt);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.brand { display: flex; align-items: center; gap: 0.7rem; }
+.brand-icon { font-size: 1.6rem; }
+h1 { font-size: 1.15rem; margin: 0; letter-spacing: 0.3px; }
+.season-label { color: var(--gold); font-size: 0.8rem; margin-top: 2px; }
+.userbox { display: flex; align-items: center; gap: 0.6rem; font-size: 0.9rem; }
+
+main { max-width: 860px; margin: 0 auto; padding: 1rem 1.2rem 3rem; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.1rem 1.2rem;
+  margin-bottom: 1rem;
+}
+
+.panel h2 { margin: 0 0 0.7rem; font-size: 1.05rem; }
+
+.hidden { display: none !important; }
+.muted { color: var(--muted); font-size: 0.85rem; }
+
+/* Auth */
+.auth-card { max-width: 380px; margin: 3rem auto; }
+.auth-tabs { display: flex; gap: 0.4rem; margin-bottom: 1rem; }
+.auth-tab {
+  flex: 1; padding: 0.55rem; cursor: pointer;
+  background: var(--panel2); color: var(--muted);
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.95rem;
+}
+.auth-tab.active { background: var(--felt); color: #fff; border-color: var(--felt); }
+
+form label { display: block; margin-bottom: 0.8rem; font-size: 0.9rem; }
+input[type="text"], input[type="password"], input[type="date"] {
+  width: 100%; margin-top: 0.3rem; padding: 0.55rem 0.7rem;
+  background: #0f1711; color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; font-size: 1rem;
+}
+
+button {
+  cursor: pointer; border: none; border-radius: 8px;
+  padding: 0.55rem 1rem; font-size: 0.95rem;
+}
+button.primary { background: var(--felt); color: #fff; width: 100%; margin-top: 0.4rem; }
+button.primary:hover { background: #2a6b45; }
+button.ghost { background: transparent; color: var(--muted); border: 1px dashed var(--border); }
+button.danger { background: transparent; color: var(--red); border: 1px solid var(--red); }
+button.small { padding: 0.3rem 0.6rem; font-size: 0.8rem; }
+
+.form-error { color: var(--red); font-size: 0.85rem; min-height: 1.1em; margin-top: 0.5rem; }
+
+/* Tabs */
+.tabs { display: flex; gap: 0.4rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.tab {
+  padding: 0.5rem 1.1rem; background: var(--panel2); color: var(--muted);
+  border: 1px solid var(--border); border-radius: 999px; font-size: 0.9rem;
+}
+.tab.active { background: var(--felt); color: #fff; border-color: var(--felt); }
+.view { display: none; }
+.view.active { display: block; }
+
+/* Standings */
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 0.55rem 0.6rem; text-align: left; font-size: 0.95rem; }
+thead th { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr:nth-child(odd) { background: rgba(255, 255, 255, 0.02); }
+.rank-1 td { color: var(--gold); font-weight: 600; }
+.rank-1 .pos { display: inline-block; width: 1.4em; }
+
+.champion-banner {
+  background: linear-gradient(135deg, #3a2f00, #1c2a22);
+  border: 1px solid var(--gold-dark);
+  border-radius: 12px; padding: 1rem 1.2rem; margin-bottom: 1rem;
+  display: flex; align-items: center; gap: 0.9rem;
+}
+.champion-banner .trophy { font-size: 2rem; }
+.champion-banner .title { color: var(--gold); font-weight: 700; font-size: 1.05rem; }
+.champion-banner .prize { color: var(--muted); font-size: 0.85rem; }
+
+/* Games */
+.form-row { display: flex; gap: 0.8rem; flex-wrap: wrap; }
+.form-row label { flex: 1; min-width: 200px; }
+.game-row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
+.game-row .pos-badge {
+  width: 2rem; height: 2rem; flex: none; border-radius: 50%;
+  background: var(--felt-dark); color: var(--gold);
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 0.85rem; border: 1px solid var(--felt);
+}
+.game-row select {
+  flex: 1; padding: 0.5rem; background: #0f1711; color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px; font-size: 0.95rem;
+}
+
+.game-card {
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 0.8rem 1rem; margin-bottom: 0.7rem; background: var(--panel2);
+}
+.game-card .ghead { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.85rem; color: var(--muted); }
+.game-card .gdate { font-weight: 600; color: var(--text); }
+.game-card .gresults { margin-top: 0.5rem; font-size: 0.9rem; }
+.game-card .gresults div { padding: 0.15rem 0; }
+.game-card .pts { color: var(--gold); font-variant-numeric: tabular-nums; }
+.game-card .gnotes { margin-top: 0.4rem; color: var(--muted); font-size: 0.82rem; }
+
+/* Seasons */
+.season-item {
+  display: flex; justify-content: space-between; align-items: center; gap: 0.6rem;
+  border: 1px solid var(--border); border-radius: 10px; padding: 0.7rem 0.9rem; margin-bottom: 0.5rem;
+}
+.season-item .sname { font-weight: 600; }
+.season-item .schamp { color: var(--gold); font-size: 0.85rem; }
+.season-item .smeta { color: var(--muted); font-size: 0.8rem; }
+
+/* Players */
+.player-item {
+  display: flex; justify-content: space-between; align-items: center; gap: 0.6rem;
+  padding: 0.55rem 0.3rem; border-bottom: 1px solid var(--border); font-size: 0.95rem;
+}
+.player-item .admin-badge { color: var(--gold); font-size: 0.75rem; border: 1px solid var(--gold-dark); border-radius: 999px; padding: 0.1rem 0.5rem; }
+
+footer { text-align: center; padding: 1rem 0 2rem; max-width: 860px; margin: 0 auto; }
