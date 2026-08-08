@@ -1,7 +1,7 @@
 # Inventory example — copy to inventory.ini and fill in the real host.
-# The ARM box is reached over SSH with the ***REMOVED*** key.
+# The ARM box is reached over SSH with a dedicated deploy key.
 [arm]
-***REMOVED*** ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/***REMOVED***
+<arm-host-ip> ansible_user=<user> ansible_ssh_private_key_file=~/.ssh/<deploy-key>
 
 [all:vars]
 ansible_python_interpreter=/usr/bin/python3

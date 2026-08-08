@@ -56,14 +56,14 @@ docker compose up --build
 ```
 Browser ──HTTPS──▶ Cloudflare edge ──tunnel──▶ cloudflared (x86 host)
                                                     │
-                                              http://***REMOVED***:8787
+                                              http://<arm-private-ip>:8787
                                                     │
                               Docker Compose ──▶ poker app (ARM host)
                                                     │
                                               SQLite volume ./data
 ```
 
-- **App**: Docker Compose on the Oracle always-free ARM instance (`***REMOVED***`),
+- **App**: Docker Compose on the Oracle always-free ARM instance,
   bound to the host's **private IP only** — no public ports.
 - **TLS**: Cloudflare Tunnel (`poker.<domain>`), DNS CNAME proxied.
 - **DB**: SQLite at `/srv/poker/data/poker.db`, backed up nightly to the

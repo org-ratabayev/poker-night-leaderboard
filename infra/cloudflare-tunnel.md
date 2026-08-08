@@ -2,16 +2,15 @@
 
 ## Architecture
 
-The Cloudflare tunnel runs on the x86 management host (`***REMOVED***`,
-`***REMOVED***`) — the same named tunnel that serves `dashboard.<domain>`.
-The poker app runs in Docker on the ARM host (`***REMOVED***`, private IP
-`***REMOVED***`). The tunnel therefore routes the `poker` hostname to the ARM
+The Cloudflare tunnel runs on the x86 management host — the same named
+tunnel that serves `dashboard.<domain>`. The poker app runs in
+Docker on the ARM host. The tunnel routes the `poker` hostname to the ARM
 box's private IP: the app never listens on a public interface.
 
 ```
-Browser ──▶ Cloudflare edge ──▶ cloudflared (x86, ***REMOVED***)
+Browser ──▶ Cloudflare edge ──▶ cloudflared (x86 host)
                                         ├─ dashboard.<domain> → http://localhost:9119
-                                        └─ poker.<domain>   → http://***REMOVED***:8787
+                                        └─ poker.<domain>   → http://<arm-private-ip>:8787
 ```
 
 ## Current config
@@ -20,14 +19,14 @@ Browser ──▶ Cloudflare edge ──▶ cloudflared (x86, ***REMOVED***)
 `cloudflared-dashboard.service`):
 
 ```yaml
-tunnel: ***REMOVED***
-credentials-file: /home/ubuntu/.cloudflared/***REMOVED***.json
+tunnel: <tunnel-uuid>
+credentials-file: /home/ubuntu/.cloudflared/<tunnel-uuid>.json
 
 ingress:
   - hostname: dashboard.<domain>
     service: http://localhost:9119
   - hostname: poker.<domain>
-    service: http://***REMOVED***:8787
+    service: http://<arm-private-ip>:8787
   - service: http_status:404
 ```
 
@@ -42,7 +41,7 @@ sudo systemctl status cloudflared-dashboard.service --no-pager
 
 | Type  | Name                  | Target                                            | Proxy |
 |-------|-----------------------|---------------------------------------------------|-------|
-| CNAME | `poker`               | `***REMOVED***.cfargotunnel.com` | ✅ Proxied |
+| CNAME | `poker`               | `<tunnel-uuid>.cfargotunnel.com`                  | ✅ Proxied |
 
 The tunnel certificate / API token is NOT stored on any machine — DNS
 records are managed manually in the Cloudflare dashboard.
@@ -57,10 +56,10 @@ curl -fsS https://poker.<domain>/api/health   # → {"ok":true}
 ## Security notes
 
 - The ARM subnet's security list allows ingress to port `8787` from the x86
-  host's private IP (`***REMOVED***/32`) **only** — the tunnel is the only
+  host's private IP (`<x86-private-ip>/32`) **only** — the tunnel is the only
   public entry point.
-- The app's Docker Compose additionally binds to `***REMOVED***:8787` (private
-  interface), never `0.0.0.0`.
+- The app's Docker Compose additionally binds to `HOST_BIND_IP` (the ARM
+  box's private IP from the host `.env`), never `0.0.0.0`.
 - TLS termination happens at Cloudflare (free Universal SSL). The origin
   connection (tunnel → app) is plain HTTP on the private network, which is
   fine for this threat model; set the SSL mode to **Full** if you ever move
