@@ -228,3 +228,16 @@ body.theme-christmas footer::after { content: " · 🎅 Merry Christmas!"; color
 @media (prefers-reduced-motion: reduce) {
   .snow { display: none; }
 }
+
+/* --- Betting --- */
+.bet-form { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin: 0.5rem 0; }
+.bet-form select, .bet-form input { margin-top: 0; }
+.bet-form input { width: 90px; }
+.bet-list { margin: 0.3rem 0; }
+.bet-item {
+  display: flex; justify-content: space-between; gap: 1rem;
+  padding: 0.3rem 0; border-bottom: 1px dashed var(--border); font-size: 0.9rem;
+}
+.gbets { margin-top: 0.6rem; border-top: 1px solid var(--border); padding-top: 0.4rem; }
+.gbets h4 { margin: 0.2rem 0 0.3rem; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); }
+.small { font-size: 0.8rem; }

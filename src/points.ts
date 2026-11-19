@@ -21,3 +21,16 @@ export function pointsForPosition(table: number[], position: number): number {
   if (!Number.isInteger(position) || position < 1) return 0;
   return table[position - 1] ?? 0;
 }
+
+/**
+ * Tournament points formula (the scoring used by games):
+ *   points = round(100 * (N - position + 1) / N)
+ *
+ * 1st place always gets 100 regardless of the field size; the last place
+ * gets ~100/N. Examples — N=6: 100, 83, 67, 50, 33, 17.
+ */
+export function formulaPoints(totalPlayers: number, position: number): number {
+  if (!Number.isInteger(position) || !Number.isInteger(totalPlayers)) return 0;
+  if (totalPlayers < 1 || position < 1 || position > totalPlayers) return 0;
+  return Math.round((100 * (totalPlayers - position + 1)) / totalPlayers);
+}

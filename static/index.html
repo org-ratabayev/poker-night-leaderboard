@@ -59,7 +59,7 @@
         <div id="champion-banner"></div>
         <div class="panel">
           <table class="standings">
-            <thead><tr><th>#</th><th>Player</th><th>Games</th><th class="num">Points</th></tr></thead>
+            <thead><tr><th>#</th><th>Player</th><th>Games</th><th>Bets</th><th class="num">Points</th></tr></thead>
             <tbody id="standings-body"></tbody>
           </table>
           <p class="muted" id="standings-empty">No games recorded yet this season.</p>
@@ -73,6 +73,7 @@
           <p class="muted" id="live-hint"></p>
           <div id="live-remaining"></div>
           <div id="live-eliminated"></div>
+          <div id="live-bets"></div>
           <div class="form-row" id="live-actions"></div>
           <div class="form-error" id="live-error"></div>
         </div>
@@ -129,7 +130,7 @@
     </section>
   </main>
 
-  <footer class="muted">Points: 1st=100 · 2nd=75 · 3rd=55 · 4th=40 · 5th=30 · 6th=20 · 7th=12 · 8th=8 · 9th=5 · 10th=3</footer>
+  <footer class="muted">Points: 1st = 100 · others by formula round(100·(N−pos+1)/N) · bets: parimutuel (hidden until the first bust-out)</footer>
   <script src="/app.js?v=__V_APP__"></script>
 </body>
 </html>

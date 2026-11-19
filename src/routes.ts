@@ -15,7 +15,7 @@
 import type { Database } from "bun:sqlite";
 import type { PlayerRow, GameRow } from "./db";
 import { clearSetting, getSetting, setSetting } from "./db";
-import { pointsForPosition } from "./points";
+import { formulaPoints } from "./points";
 import {
   clearSessionCookie,
   clientIp,
@@ -68,24 +68,49 @@ function validateDate(d: string): boolean {
 export interface StandingsRow {
   player: { id: number; name: string };
   games: number;
+  bets: number;
   points: number;
 }
 
+/** Betting limits (in season points). */
+export const MIN_STAKE = 5;
+export const MAX_STAKE = 100;
+
 function standingsForSeason(db: Database, seasonId: number): StandingsRow[] {
+  // Season points = tournament points from finished games + betting P/L
+  // (payout − stake) from finished games.
   const rows = db
     .query(
-      `SELECT r.player_id, p.name, COUNT(DISTINCT g.id) AS games, SUM(r.points) AS points
-       FROM results r
-       JOIN games g ON g.id = r.game_id
-       JOIN players p ON p.id = r.player_id
-       WHERE g.season_id = ? AND g.status = 'finished'
-       GROUP BY r.player_id
+      `WITH gp AS (
+         SELECT r.player_id AS pid,
+                COUNT(DISTINCT r.game_id) AS games,
+                SUM(r.points) AS pts
+         FROM results r JOIN games g ON g.id = r.game_id
+         WHERE g.season_id = ? AND g.status = 'finished'
+         GROUP BY r.player_id
+       ), bp AS (
+         SELECT b.bettor_id AS pid,
+                COUNT(DISTINCT b.game_id) AS bets,
+                SUM(b.payout - b.stake) AS pts
+         FROM bets b JOIN games g ON g.id = b.game_id
+         WHERE g.season_id = ? AND g.status = 'finished'
+         GROUP BY b.bettor_id
+       )
+       SELECT p.id, p.name,
+              COALESCE(gp.games, 0) AS games,
+              COALESCE(bp.bets, 0) AS bets,
+              COALESCE(gp.pts, 0) + COALESCE(bp.pts, 0) AS points
+       FROM players p
+       LEFT JOIN gp ON gp.pid = p.id
+       LEFT JOIN bp ON bp.pid = p.id
+       WHERE gp.games IS NOT NULL OR bp.pid IS NOT NULL
        ORDER BY points DESC, p.name COLLATE NOCASE ASC`,
     )
-    .all(seasonId) as { player_id: number; name: string; games: number; points: number }[];
+    .all(seasonId, seasonId) as { id: number; name: string; games: number; bets: number; points: number }[];
   return rows.map((r) => ({
-    player: { id: r.player_id, name: r.name },
+    player: { id: r.id, name: r.name },
     games: r.games,
+    bets: r.bets,
     points: r.points,
   }));
 }
@@ -121,12 +146,22 @@ function finishedGames(db: Database, seasonId: number, limit = 100): unknown[] {
         position: r.position,
         points: r.points,
       })),
+      bets: db
+        .query(
+          `SELECT b.bettor_id AS bettorId, bp.name AS bettorName,
+                  b.on_player_id AS onPlayerId, op.name AS onName, b.stake, b.payout
+           FROM bets b
+           JOIN players bp ON bp.id = b.bettor_id
+           JOIN players op ON op.id = b.on_player_id
+           WHERE b.game_id = ? ORDER BY b.id`,
+        )
+        .all(g.id) as unknown[],
     };
   });
 }
 
-/** The live game (status = 'running') for a season, if any. */
-function runningGame(db: Database, seasonId: number): unknown | null {
+/** The live game (status = 'running') for a season, if any. Bets stay hidden until the lock. */
+function runningGame(db: Database, seasonId: number, viewerId: number | null): unknown | null {
   const game = db
     .query("SELECT * FROM games WHERE season_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1")
     .get(seasonId) as GameRow | null;
@@ -146,6 +181,33 @@ function runningGame(db: Database, seasonId: number): unknown | null {
     .filter((r) => r.position !== null)
     .map((r) => ({ id: r.player_id, name: r.name, position: r.position as number }))
     .sort((a, b) => b.position - a.position); // first player out first
+  const locked = game.bets_locked === 1;
+  // My own bets are always visible to me; everybody's bets only after the lock
+  // (before the lock nobody can see who bet on whom — no copying, no collusion).
+  const mine = viewerId
+    ? (db
+        .query(
+          `SELECT b.id, b.on_player_id AS onPlayerId, p.name AS onName, b.stake, b.created_at AS createdAt
+           FROM bets b JOIN players p ON p.id = b.on_player_id
+           WHERE b.game_id = ? AND b.bettor_id = ? ORDER BY b.id`,
+        )
+        .all(game.id, viewerId) as unknown[])
+    : [];
+  const all = locked
+    ? (db
+        .query(
+          `SELECT b.bettor_id AS bettorId, bp.name AS bettorName,
+                  b.on_player_id AS onPlayerId, op.name AS onName, b.stake
+           FROM bets b
+           JOIN players bp ON bp.id = b.bettor_id
+           JOIN players op ON op.id = b.on_player_id
+           WHERE b.game_id = ? ORDER BY b.id`,
+        )
+        .all(game.id) as unknown[])
+    : null;
+  const pool = locked
+    ? (db.query("SELECT COALESCE(SUM(stake), 0) AS s FROM bets WHERE game_id = ?").get(game.id) as { s: number }).s
+    : null;
   return {
     id: game.id,
     date: game.date,
@@ -154,7 +216,27 @@ function runningGame(db: Database, seasonId: number): unknown | null {
     totalPlayers: rows.length,
     remaining,
     eliminated,
+    bets: { locked, open: game.status === "running" && !locked, pool, mine, all },
   };
+}
+
+/** Parimutuel settlement: losers' stakes are split among those who backed the winner. */
+function settleBets(db: Database, gameId: number, winnerId: number): void {
+  const bets = db.query("SELECT id, on_player_id, stake FROM bets WHERE game_id = ?").all(gameId) as {
+    id: number;
+    on_player_id: number;
+    stake: number;
+  }[];
+  if (bets.length === 0) return;
+  const pool = bets.reduce((sum, b) => sum + b.stake, 0);
+  const winnerStake = bets.filter((b) => b.on_player_id === winnerId).reduce((sum, b) => sum + b.stake, 0);
+  const update = db.prepare("UPDATE bets SET payout = ? WHERE id = ?");
+  for (const bet of bets) {
+    let payout = 0;
+    if (winnerStake === 0) payout = bet.stake; // nobody backed the winner → stakes are refunded
+    else if (bet.on_player_id === winnerId) payout = Math.floor((bet.stake * pool) / winnerStake);
+    update.run(payout, bet.id);
+  }
 }
 
 function seasonSummary(db: Database, season: { id: number; name: string; prize: string | null; archived_at: string | null }): unknown {
@@ -242,7 +324,7 @@ export async function handleState(ctx: Ctx, req: Request): Promise<Response> {
           prize: active.prize,
           standings: standingsForSeason(ctx.db, active.id),
           games: finishedGames(ctx.db, active.id),
-          runningGame: runningGame(ctx.db, active.id),
+          runningGame: runningGame(ctx.db, active.id, user?.id ?? null),
         }
       : null,
     seasons,
@@ -439,6 +521,8 @@ export async function handleEliminate(ctx: Ctx, req: Request, gameId: number): P
   ctx.db
     .query("UPDATE results SET position = ? WHERE game_id = ? AND player_id = ?")
     .run(position, gameId, playerId);
+  // The first elimination locks betting: from here the outcome is partially known.
+  ctx.db.query("UPDATE games SET bets_locked = 1 WHERE id = ?").run(gameId);
 
   const remaining = inGame.length - 1;
   if (remaining > 1) {
@@ -457,13 +541,60 @@ export async function handleEliminate(ctx: Ctx, req: Request, gameId: number): P
     "UPDATE results SET points = ? WHERE game_id = ? AND player_id = ?",
   );
   for (const r of finalRows) {
-    updatePoints.run(pointsForPosition(ctx.points, r.position), gameId, r.player_id);
+    updatePoints.run(formulaPoints(finalRows.length, r.position), gameId, r.player_id);
   }
   ctx.db
     .query("UPDATE games SET status = 'finished', finished_at = datetime('now') WHERE id = ?")
     .run(gameId);
+  settleBets(ctx.db, gameId, winner.player_id);
 
   return json({ ok: true, finished: true, winnerId: winner.player_id });
+}
+
+/** POST /api/games/:id/bets { onPlayerId, stake } — non-participants only, before the lock. */
+export async function handlePlaceBet(ctx: Ctx, req: Request, gameId: number): Promise<Response> {
+  const user = await loadCurrentPlayer(ctx.db, ctx.sessionSecret, req);
+  if (!user) return error("Not logged in", 401);
+
+  const body = (await req.json().catch(() => null)) as { onPlayerId?: unknown; stake?: unknown } | null;
+  const onPlayerId = typeof body?.onPlayerId === "number" ? body.onPlayerId : null;
+  const stake = typeof body?.stake === "number" ? Math.floor(body.stake) : null;
+  if (onPlayerId === null || stake === null) return error("onPlayerId and stake are required");
+
+  const game = ctx.db.query("SELECT * FROM games WHERE id = ?").get(gameId) as GameRow | null;
+  if (!game) return error("Game not found", 404);
+  if (game.status !== "running") return error("Game is not running", 400);
+  if (game.bets_locked === 1) return error("Betting is locked — the first player is already out", 409);
+
+  const participates = ctx.db
+    .query("SELECT 1 AS x FROM results WHERE game_id = ? AND player_id = ?")
+    .get(gameId, user.id);
+  if (participates) return error("Players in the game cannot bet on it", 403);
+
+  const onPlayer = ctx.db
+    .query("SELECT 1 AS x FROM results WHERE game_id = ? AND player_id = ?")
+    .get(gameId, onPlayerId);
+  if (!onPlayer) return error("You can only bet on a player in this game", 400);
+
+  if (stake < MIN_STAKE) return error(`Minimum stake is ${MIN_STAKE} points`);
+  if (stake > MAX_STAKE) return error(`Maximum stake is ${MAX_STAKE} points`);
+
+  // Balance = current season points; already committed stakes count against it.
+  const balance =
+    standingsForSeason(ctx.db, game.season_id).find((r) => r.player.id === user.id)?.points ?? 0;
+  const committed = (
+    ctx.db
+      .query("SELECT COALESCE(SUM(stake), 0) AS s FROM bets WHERE game_id = ? AND bettor_id = ?")
+      .get(gameId, user.id) as { s: number }
+  ).s;
+  if (balance - committed < stake) {
+    return error(`Not enough points (available: ${Math.max(balance - committed, 0)})`);
+  }
+
+  ctx.db
+    .query("INSERT INTO bets (game_id, bettor_id, on_player_id, stake) VALUES (?, ?, ?, ?)")
+    .run(gameId, user.id, onPlayerId, stake);
+  return json({ ok: true, available: balance - committed - stake }, 201);
 }
 
 /** POST /api/games/:id/undo — revert the last step (elimination or the win). */
@@ -484,6 +615,8 @@ export async function handleUndo(ctx: Ctx, req: Request, gameId: number): Promis
       .query("UPDATE results SET position = NULL, points = 0 WHERE game_id = ? AND player_id = ?")
       .run(gameId, winner.player_id);
     ctx.db.query("UPDATE results SET points = 0 WHERE game_id = ?").run(gameId);
+    // Bets stay locked once the first player was out; only the payouts are reversed.
+    ctx.db.query("UPDATE bets SET payout = 0 WHERE game_id = ?").run(gameId);
     ctx.db
       .query("UPDATE games SET status = 'running', finished_at = NULL WHERE id = ?")
       .run(gameId);

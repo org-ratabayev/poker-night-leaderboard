@@ -35,6 +35,7 @@ export interface GameRow {
   date: string;
   notes: string | null;
   status: string; // 'running' | 'finished'
+  bets_locked: number; // 1 once the first player is out
   created_by: number | null;
   created_at: string;
   finished_at: string | null;
@@ -116,6 +117,16 @@ function migrate(db: Database): void {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS bets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+      bettor_id INTEGER NOT NULL REFERENCES players(id),
+      on_player_id INTEGER NOT NULL REFERENCES players(id),
+      stake INTEGER NOT NULL,
+      payout INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_bets_game ON bets(game_id);
   `);
 
   // --- migrations for databases created by older versions ---
@@ -131,6 +142,9 @@ function migrate(db: Database): void {
   }
   if (!gameCols.includes("finished_at")) {
     db.exec("ALTER TABLE games ADD COLUMN finished_at TEXT;");
+  }
+  if (!gameCols.includes("bets_locked")) {
+    db.exec("ALTER TABLE games ADD COLUMN bets_locked INTEGER NOT NULL DEFAULT 0;");
   }
 
   // results.position used to be NOT NULL; the live model needs NULL for

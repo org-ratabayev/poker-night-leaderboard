@@ -157,6 +157,7 @@ function renderStandings() {
         <td><span class="pos">${medal}</span></td>
         <td>${esc(row.player.name)}</td>
         <td>${row.games}</td>
+        <td>${row.bets ? row.bets : "—"}</td>
         <td class="num">${row.points}</td>
       </tr>`;
     })
@@ -243,6 +244,8 @@ function renderLive(live, admin) {
     ? `<button class="ghost" id="undo-btn">Undo last step</button>`
     : "";
 
+  renderLiveBets(live);
+
   if (admin) {
     $("#live-remaining").querySelectorAll(".elim-btn").forEach((btn) =>
       btn.addEventListener("click", async () => {
@@ -261,6 +264,75 @@ function renderLive(live, admin) {
       if (!confirm("Undo the last step?")) return;
       try {
         await api(`/api/games/${live.id}/undo`, { method: "POST" });
+        await reload();
+      } catch (err) { $("#live-error").textContent = err.message; }
+    });
+  }
+}
+
+function renderLiveBets(live) {
+  const host = $("#live-bets");
+  const b = live.bets;
+  const me = state.me;
+  if (!b || !me) { host.innerHTML = ""; return; }
+  const inGame =
+    live.remaining.some((p) => p.id === me.id) || live.eliminated.some((p) => p.id === me.id);
+  const row = (state.activeSeason.standings || []).find((r) => r.player.id === me.id);
+  const myPoints = row ? row.points : 0;
+
+  let html = "";
+  if (b.open) {
+    if (inGame) {
+      html = `<p class="muted small">You're in the game — betting is for spectators only.</p>`;
+    } else if (myPoints < 5) {
+      html = `<p class="muted small">Betting needs at least 5 season points (you have ${myPoints}).</p>`;
+    } else {
+      const options = live.remaining
+        .map((p) => `<option value="${p.id}">${esc(p.name)}</option>`)
+        .join("");
+      html = `<h3>🎲 Bets — open until the first bust-out</h3>
+        <div class="bet-form">
+          <select id="bet-player">${options}</select>
+          <input id="bet-stake" type="number" min="5" max="100" step="1" value="10" title="Stake (5–100 points)">
+          <button class="primary small" id="bet-btn">Place bet</button>
+        </div>
+        <p class="muted small">Your balance: ${myPoints} pts · who bet on whom stays hidden until the lock.</p>`;
+    }
+  } else {
+    html = `<h3>🎲 Bets — locked</h3>`;
+    if (b.all && b.all.length) {
+      html += `<div class="bet-list">${b.all
+        .map(
+          (x) =>
+            `<div class="bet-item"><span>${esc(x.bettorName)} → <b>${esc(x.onName)}</b></span><span class="muted">${x.stake} pts</span></div>`,
+        )
+        .join("")}</div><p class="muted small">Pool: ${b.pool} pts</p>`;
+    } else {
+      html += `<p class="muted small">No bets were placed before the lock.</p>`;
+    }
+  }
+
+  if (b.mine && b.mine.length) {
+    html += `<h3>Your bets</h3><div class="bet-list">${b.mine
+      .map(
+        (x) =>
+          `<div class="bet-item"><span>on <b>${esc(x.onName)}</b></span><span class="muted">${x.stake} pts</span></div>`,
+      )
+      .join("")}</div>`;
+  }
+  host.innerHTML = html;
+
+  const btn = $("#bet-btn");
+  if (btn) {
+    btn.addEventListener("click", async () => {
+      try {
+        await api(`/api/games/${live.id}/bets`, {
+          method: "POST",
+          body: JSON.stringify({
+            onPlayerId: Number($("#bet-player").value),
+            stake: Number($("#bet-stake").value),
+          }),
+        });
         await reload();
       } catch (err) { $("#live-error").textContent = err.message; }
     });
@@ -313,6 +385,15 @@ function renderHistory() {
         <div class="gresults">
           ${g.results.map((r) => `<div><b>${r.position}.</b> ${esc(r.name)} <span class="pts">+${r.points}</span></div>`).join("")}
         </div>
+        ${(g.bets && g.bets.length)
+          ? `<div class="gbets"><h4>🎲 Bets</h4>${g.bets
+              .map((b) => {
+                const outcome =
+                  b.payout === 0 ? "lost" : b.payout > b.stake ? `won +${b.payout - b.stake}` : "returned";
+                return `<div class="bet-item"><span>${esc(b.bettorName)} → <b>${esc(b.onName)}</b></span><span class="muted">${b.stake} pts · ${outcome}</span></div>`;
+              })
+              .join("")}</div>`
+          : ""}
         ${g.notes ? `<div class="gnotes">${esc(g.notes)}</div>` : ""}
       </div>`,
     )

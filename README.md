@@ -10,7 +10,15 @@ simple, the deployment is fully automated, and pull requests are welcome.
 - **Seasons** — create a season, add results after every game, archive the
   season when it's done. The champion 🏆 is recorded for history and a new
   season starts automatically.
-- **Points table** — configurable: `100,75,55,40,30,20,12,8,5,3` by default.
+- **Points by formula** — 1st place always gets 100; the rest scale by
+  `round(100 · (N − position + 1) / N)` (N = players in that game). For 6
+  players: 100 / 83 / 67 / 50 / 33 / 17.
+- **Betting between players** — spectators (players not in the current game)
+  wager their own season points on who wins. Bets are **hidden from everyone
+  until the first bust-out**, then locked and revealed. Payouts are parimutuel:
+  losing stakes are split among those who backed the winner; if nobody backed
+  the winner, all stakes are refunded. Betting P/L is added to the season
+  standings. The admin follows exactly the same rules as everyone else.
 - **Live game tracking** — the admin starts a game with the players at the
   table, then marks players as they bust out. The first player out gets the
   worst position, the last one standing wins (1st place). Everyone else can
@@ -144,6 +152,7 @@ tunnel ingress config and the DNS record.
 | POST   | `/api/games`                | admin | Start a game (participants, one per day) |
 | POST   | `/api/games/:id/eliminate`  | admin | Mark a player as eliminated          |
 | POST   | `/api/games/:id/undo`       | admin | Undo the last elimination / the win  |
+| POST   | `/api/games/:id/bets`       | user  | Place a bet (non-participants only, before the lock) |
 | DELETE | `/api/games/:id`            | admin | Delete a game                        |
 | POST   | `/api/seasons`              | admin | Create a season (when none active)   |
 | POST   | `/api/seasons/:id/archive`  | admin | Archive + auto-start next season     |

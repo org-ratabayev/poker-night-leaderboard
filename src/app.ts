@@ -16,6 +16,7 @@ import {
   handleLogin,
   handleLogout,
   handleMe,
+  handlePlaceBet,
   handleRegister,
   handleRenamePlayer,
   handleSeason,
@@ -138,6 +139,11 @@ export function createApp(db: Database, config: AppConfig): (req: Request) => Pr
       pattern: /^\/api\/games\/(\d+)\/undo$/,
       method: "POST",
       handler: (req, _url, m) => handleUndo(ctx, req, Number(m[1])),
+    },
+    {
+      pattern: /^\/api\/games\/(\d+)\/bets$/,
+      method: "POST",
+      handler: (req, _url, m) => handlePlaceBet(ctx, req, Number(m[1])),
     },
     {
       pattern: /^\/api\/games\/(\d+)$/,

@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "../src/db";
-import { parsePointsTable, pointsForPosition, DEFAULT_POINTS_TABLE } from "../src/points";
+import { parsePointsTable, pointsForPosition, formulaPoints, DEFAULT_POINTS_TABLE } from "../src/points";
 import { seasonalTheme } from "../src/routes";
 import { createApp } from "../src/app";
 
@@ -38,6 +38,8 @@ function setCookieOf(res: Response): string {
 
 let adminCookie = "";
 let playerCookie = "";
+let evaCookie = "";
+let gameBId = 0;
 
 beforeAll(() => {
   dataDir = mkdtempSync(join(tmpdir(), "poker-test-"));
@@ -70,6 +72,17 @@ describe("points", () => {
     expect(pointsForPosition(t, 10)).toBe(3);
     expect(pointsForPosition(t, 11)).toBe(0); // beyond table
     expect(pointsForPosition(t, 0)).toBe(0);
+  });
+
+  test("formula scoring: 1st always 100, last gets 100/N", () => {
+    expect(formulaPoints(2, 1)).toBe(100);
+    expect(formulaPoints(2, 2)).toBe(50);
+    expect(formulaPoints(3, 2)).toBe(67);
+    expect(formulaPoints(4, 4)).toBe(25);
+    expect(formulaPoints(6, 1)).toBe(100);
+    expect(formulaPoints(6, 6)).toBe(17);
+    expect(formulaPoints(6, 0)).toBe(0);
+    expect(formulaPoints(6, 7)).toBe(0);
   });
 });
 
@@ -219,7 +232,7 @@ describe("games: live tournament", () => {
     expect(results[0].points).toBe(100);
     expect(results[1].name).toBe("Alex");
     expect(results[1].position).toBe(2);
-    expect(results[1].points).toBe(75);
+    expect(results[1].points).toBe(50); // formula: 2 players → last gets 100/2
     // standings
     expect(body.activeSeason.standings[0].player.name).toBe("Ruslan");
     expect(body.activeSeason.standings[0].points).toBe(100);
@@ -288,9 +301,9 @@ describe("games: live tournament", () => {
     const results = state.activeSeason.games[0].results;
     const byName = Object.fromEntries(results.map((r) => [r.name, r]));
     expect(byName["Vini"].position).toBe(3);
-    expect(byName["Vini"].points).toBe(55);
+    expect(byName["Vini"].points).toBe(33); // formula: 3 players → 100/3
     expect(byName["Alex"].position).toBe(2);
-    expect(byName["Alex"].points).toBe(75);
+    expect(byName["Alex"].points).toBe(67);
     expect(byName["Ruslan"].position).toBe(1);
     expect(byName["Ruslan"].points).toBe(100);
   });
@@ -318,6 +331,146 @@ describe("games: live tournament", () => {
     expect(after.activeSeason.games.length).toBe(0);
     expect(after.activeSeason.standings.length).toBe(0);
     expect(after.todayHasGame).toBe(false);
+  });
+});
+
+// --- Bets: hidden until the lock, parimutuel payouts, admin = regular player ---
+
+describe("betting", () => {
+  test("setup: 4-player game builds season points", async () => {
+    const eva = await req("POST", "/api/auth/register", { name: "Eva", password: "password123", invite: "secret-invite" });
+    expect(eva.status).toBe(201);
+    evaCookie = setCookieOf(eva);
+
+    const start = await req("POST", "/api/games", { participants: [1, 2, 3, 4], date: "2026-08-10" }, adminCookie);
+    expect(start.status).toBe(201);
+    const { gameId } = (await start.json()) as { gameId: number };
+
+    for (const p of [4, 3, 2]) {
+      await req("POST", `/api/games/${gameId}/eliminate`, { playerId: p }, adminCookie);
+    }
+    const state = await (await req("GET", "/api/state", undefined, adminCookie)).json() as {
+      activeSeason: { standings: { player: { name: string }; points: number }[] };
+    };
+    const byName = Object.fromEntries(state.activeSeason.standings.map((r) => [r.player.name, r.points]));
+    expect(byName["Ruslan"]).toBe(100);
+    expect(byName["Alex"]).toBe(75);
+    expect(byName["Vini"]).toBe(50);
+    expect(byName["Eva"]).toBe(25);
+  });
+
+  test("game B starts with two participants", async () => {
+    const res = await req("POST", "/api/games", { participants: [2, 3], date: "2026-08-11" }, adminCookie);
+    expect(res.status).toBe(201);
+    gameBId = ((await res.json()) as { gameId: number }).gameId;
+  });
+
+  test("participants cannot bet", async () => {
+    // Vini (3) is playing
+    const res = await req("POST", `/api/games/${gameBId}/bets`, { onPlayerId: 2, stake: 10 }, playerCookie);
+    expect(res.status).toBe(403);
+  });
+
+  test("unauthenticated cannot bet", async () => {
+    const res = await req("POST", `/api/games/${gameBId}/bets`, { onPlayerId: 2, stake: 10 });
+    expect(res.status).toBe(401);
+  });
+
+  test("stake limits are enforced", async () => {
+    expect((await req("POST", `/api/games/${gameBId}/bets`, { onPlayerId: 2, stake: 2 }, adminCookie)).status).toBe(400);
+    expect((await req("POST", `/api/games/${gameBId}/bets`, { onPlayerId: 2, stake: 101 }, adminCookie)).status).toBe(400);
+  });
+
+  test("can only bet on a player in the game", async () => {
+    // Ruslan (1) is not in game B
+    const res = await req("POST", `/api/games/${gameBId}/bets`, { onPlayerId: 1, stake: 10 }, adminCookie);
+    expect(res.status).toBe(400);
+  });
+
+  test("spectators bet — the admin exactly like anyone else", async () => {
+    // Ruslan (admin, not playing) backs Alex; Eva backs Vini.
+    const a = await req("POST", `/api/games/${gameBId}/bets`, { onPlayerId: 2, stake: 20 }, adminCookie);
+    expect(a.status).toBe(201);
+    const b = await req("POST", `/api/games/${gameBId}/bets`, { onPlayerId: 3, stake: 20 }, evaCookie);
+    expect(b.status).toBe(201);
+  });
+
+  test("stake cannot exceed the bettor's balance", async () => {
+    // Eva has 25 pts and already committed 20 → 10 more is too much.
+    const res = await req("POST", `/api/games/${gameBId}/bets`, { onPlayerId: 2, stake: 10 }, evaCookie);
+    expect(res.status).toBe(400);
+  });
+
+  test("bets are hidden from everyone before the lock", async () => {
+    const asDirector = await (await req("GET", "/api/state", undefined, adminCookie)).json() as {
+      activeSeason: { runningGame: { bets: { locked: boolean; all: unknown[] | null; mine: unknown[] } } };
+    };
+    expect(asDirector.activeSeason.runningGame.bets.locked).toBe(false);
+    expect(asDirector.activeSeason.runningGame.bets.all).toBeNull();
+    expect(asDirector.activeSeason.runningGame.bets.mine.length).toBe(1); // only my own bets
+
+    // A participant sees nobody's bets, not even their own (they have none)
+    const asPlayer = await (await req("GET", "/api/state", undefined, playerCookie)).json() as {
+      activeSeason: { runningGame: { bets: { all: unknown[] | null; mine: unknown[] } } };
+    };
+    expect(asPlayer.activeSeason.runningGame.bets.all).toBeNull();
+    expect(asPlayer.activeSeason.runningGame.bets.mine).toEqual([]);
+  });
+
+  test("first elimination locks betting and reveals all bets", async () => {
+    const res = await req("POST", `/api/games/${gameBId}/eliminate`, { playerId: 3 }, adminCookie);
+    const body = (await res.json()) as { finished: boolean; winnerId: number };
+    expect(body.finished).toBe(true);
+    expect(body.winnerId).toBe(2); // Alex won
+
+    // betting is closed now
+    const late = await req("POST", `/api/games/${gameBId}/bets`, { onPlayerId: 2, stake: 5 }, evaCookie);
+    expect([400, 409]).toContain(late.status);
+
+    const state = await (await req("GET", "/api/state", undefined, adminCookie)).json() as {
+      activeSeason: { games: { id: number; bets: { bettorName: string; onName: string; stake: number; payout: number }[] }[] };
+    };
+    const game = state.activeSeason.games.find((g) => g.id === gameBId)!;
+    const byBettor = Object.fromEntries(game.bets.map((b) => [b.bettorName, b]));
+    // Parimutuel: pool 40, winner backed with 20 → Ruslan gets 40 back (+20), Eva loses 20.
+    expect(byBettor["Ruslan"].payout).toBe(40);
+    expect(byBettor["Eva"].payout).toBe(0);
+  });
+
+  test("betting P/L is reflected in the standings", async () => {
+    const state = await (await req("GET", "/api/state", undefined, adminCookie)).json() as {
+      activeSeason: { standings: { player: { name: string }; points: number; bets: number }[] };
+    };
+    const byName = Object.fromEntries(state.activeSeason.standings.map((r) => [r.player.name, r]));
+    // Ruslan: 100 (game A) + 20 (bet profit)
+    expect(byName["Ruslan"].points).toBe(120);
+    expect(byName["Ruslan"].bets).toBe(1);
+    // Alex: 75 (game A) + 100 (game B win)
+    expect(byName["Alex"].points).toBe(175);
+    // Vini: 50 + 50
+    expect(byName["Vini"].points).toBe(100);
+    // Eva: 25 − 20
+    expect(byName["Eva"].points).toBe(5);
+    // leader
+    expect(state.activeSeason.standings[0].player.name).toBe("Alex");
+  });
+
+  test("stakes are refunded when nobody backed the winner", async () => {
+    const start = await req("POST", "/api/games", { participants: [1, 2], date: "2026-08-12" }, adminCookie);
+    expect(start.status).toBe(201);
+    const { gameId } = (await start.json()) as { gameId: number };
+
+    // Eva has 5 pts → bets 5 on Alex; Ruslan (playing) wins.
+    const bet = await req("POST", `/api/games/${gameId}/bets`, { onPlayerId: 2, stake: 5 }, evaCookie);
+    expect(bet.status).toBe(201);
+
+    await req("POST", `/api/games/${gameId}/eliminate`, { playerId: 2 }, adminCookie);
+
+    const state = await (await req("GET", "/api/state", undefined, adminCookie)).json() as {
+      activeSeason: { games: { id: number; bets: { bettorName: string; stake: number; payout: number }[] }[] };
+    };
+    const game = state.activeSeason.games.find((g) => g.id === gameId)!;
+    expect(game.bets[0].payout).toBe(game.bets[0].stake); // refunded
   });
 });
 
