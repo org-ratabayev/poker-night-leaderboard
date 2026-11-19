@@ -477,6 +477,56 @@ describe("betting", () => {
   });
 });
 
+// --- Bets can be cancelled before the lock (fixing a mis-click) ---
+
+describe("bet cancellation", () => {
+  let gameDId = 0;
+
+  test("setup: a fresh game", async () => {
+    const res = await req("POST", "/api/games", { participants: [1, 2], date: "2026-08-13" }, adminCookie);
+    expect(res.status).toBe(201);
+    gameDId = ((await res.json()) as { gameId: number }).gameId;
+  });
+
+  test("own bet can be cancelled and the points are released", async () => {
+    // Ruslan's balance here is 265 (bank + game points + bet P/L); the max
+    // stake is 100, so two bets exhaust it and a third is rejected.
+    expect((await req("POST", `/api/games/${gameDId}/bets`, { onPlayerId: 2, stake: 100 }, adminCookie)).status).toBe(201);
+    expect((await req("POST", `/api/games/${gameDId}/bets`, { onPlayerId: 2, stake: 100 }, adminCookie)).status).toBe(201);
+    expect((await req("POST", `/api/games/${gameDId}/bets`, { onPlayerId: 2, stake: 100 }, adminCookie)).status).toBe(400);
+
+    // Cancel one bet → 100 points are free again.
+    const state = (await (await req("GET", "/api/state", undefined, adminCookie)).json()) as {
+      activeSeason: { runningGame: { bets: { mine: { id: number }[] } } };
+    };
+    const first = state.activeSeason.runningGame.bets.mine[0].id;
+    const del = await req("DELETE", `/api/games/${gameDId}/bets/${first}`, undefined, adminCookie);
+    expect(del.status).toBe(200);
+
+    const retry = await req("POST", `/api/games/${gameDId}/bets`, { onPlayerId: 2, stake: 100 }, adminCookie);
+    expect(retry.status).toBe(201);
+  });
+
+  test("you cannot cancel somebody else's bet", async () => {
+    const state = (await (await req("GET", "/api/state", undefined, adminCookie)).json()) as {
+      activeSeason: { runningGame: { bets: { mine: { id: number }[] } } };
+    };
+    const mineBetId = state.activeSeason.runningGame.bets.mine[0].id;
+    const res = await req("DELETE", `/api/games/${gameDId}/bets/${mineBetId}`, undefined, evaCookie);
+    expect(res.status).toBe(403);
+  });
+
+  test("cancelling is impossible after the lock", async () => {
+    const state = (await (await req("GET", "/api/state", undefined, adminCookie)).json()) as {
+      activeSeason: { runningGame: { bets: { mine: { id: number }[] } } };
+    };
+    const mineBetId = state.activeSeason.runningGame.bets.mine[0].id;
+    await req("POST", `/api/games/${gameDId}/eliminate`, { playerId: 2 }, adminCookie); // locks + finishes
+    const res = await req("DELETE", `/api/games/${gameDId}/bets/${mineBetId}`, undefined, adminCookie);
+    expect([400, 409]).toContain(res.status);
+  });
+});
+
 // --- Avatars ---
 
 describe("avatars", () => {

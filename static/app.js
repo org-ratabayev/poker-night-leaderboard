@@ -276,6 +276,15 @@ function renderLive(live, admin) {
   }
 }
 
+/**
+ * Betting form. The live view refreshes every 10s — so the user's choice is
+ * kept in `betDraft` and re-applied on every re-render. Nothing is preselected
+ * by default (no accidental bets on the first player in the list), the submit
+ * button stays disabled until a player is picked, and a confirmation shows
+ * exactly who gets the bet.
+ */
+let betDraft = { onPlayerId: null, stake: 10 };
+
 function renderLiveBets(live) {
   const host = $("#live-bets");
   const b = live.bets;
@@ -286,11 +295,17 @@ function renderLiveBets(live) {
 
   let html = "";
   if (b.open) {
-    // Everyone can bet on anyone still in the game — including themselves.
-    const options = live.remaining
-      .map((p) => `<option value="${p.id}">${esc(p.name)}${p.id === me.id ? " (you)" : ""}</option>`)
-      .join("");
-    if (!options) {
+    // Forget a pick that is no longer valid (player busted out meanwhile).
+    if (!live.remaining.some((p) => p.id === betDraft.onPlayerId)) betDraft.onPlayerId = null;
+    const options =
+      `<option value="">— choose a player —</option>` +
+      live.remaining
+        .map(
+          (p) =>
+            `<option value="${p.id}"${p.id === betDraft.onPlayerId ? " selected" : ""}>${esc(p.name)}${p.id === me.id ? " (you)" : ""}</option>`,
+        )
+        .join("");
+    if (live.remaining.length === 0) {
       html = `<p class="muted small">Nobody left to bet on.</p>`;
     } else if (myPoints < 5) {
       html = `<p class="muted small">Betting needs at least 5 points (you have ${myPoints}).</p>`;
@@ -298,10 +313,10 @@ function renderLiveBets(live) {
       html = `<h3>🎲 Bets — open until the first bust-out</h3>
         <div class="bet-form">
           <select id="bet-player">${options}</select>
-          <input id="bet-stake" type="number" min="5" max="100" step="1" value="10" title="Stake (5–100 points)">
-          <button class="primary small" id="bet-btn">Place bet</button>
+          <input id="bet-stake" type="number" min="5" max="100" step="1" value="${betDraft.stake}" title="Stake (5–100 points)">
+          <button class="primary small" id="bet-btn" ${betDraft.onPlayerId ? "" : "disabled"}>Place bet</button>
         </div>
-        <p class="muted small">Your balance: ${myPoints} pts · who bet on whom stays hidden until the lock.</p>`;
+        <p class="muted small">Balance: ${myPoints} pts · your choice survives the auto-refresh · bets stay hidden until the lock.</p>`;
     }
   } else {
     html = `<h3>🎲 Bets — locked</h3>`;
@@ -321,27 +336,65 @@ function renderLiveBets(live) {
     html += `<h3>Your bets</h3><div class="bet-list">${b.mine
       .map(
         (x) =>
-          `<div class="bet-item"><span class="name-cell">on ${avatarHtml(x.onName, x.onAvatar, "sm")} <b>${esc(x.onName)}</b></span><span class="muted">${x.stake} pts</span></div>`,
+          `<div class="bet-item"><span class="name-cell">on ${avatarHtml(x.onName, x.onAvatar, "sm")} <b>${esc(x.onName)}</b></span><span class="muted">${x.stake} pts${
+            b.open
+              ? ` <button class="ghost small cancel-bet" data-bet="${x.id}" title="Cancel this bet (points returned)">✕</button>`
+              : ""
+          }</span></div>`,
       )
       .join("")}</div>`;
   }
   host.innerHTML = html;
 
+  const sel = $("#bet-player");
+  if (sel) {
+    sel.addEventListener("change", () => {
+      betDraft.onPlayerId = sel.value ? Number(sel.value) : null;
+      const btn = $("#bet-btn");
+      if (btn) btn.disabled = !betDraft.onPlayerId;
+    });
+  }
+  const stakeInput = $("#bet-stake");
+  if (stakeInput) {
+    stakeInput.addEventListener("input", () => {
+      betDraft.stake = Number(stakeInput.value) || 0;
+    });
+  }
+
   const btn = $("#bet-btn");
   if (btn) {
     btn.addEventListener("click", async () => {
+      if (!betDraft.onPlayerId) {
+        $("#live-error").textContent = "Pick a player first";
+        return;
+      }
+      const target = live.remaining.find((p) => p.id === betDraft.onPlayerId);
+      const stake = Number($("#bet-stake").value) || 0;
+      if (!target) {
+        $("#live-error").textContent = "That player is no longer in the game";
+        return;
+      }
+      if (!confirm(`Place a bet: ${stake} pts on ${target.name}?`)) return;
       try {
         await api(`/api/games/${live.id}/bets`, {
           method: "POST",
-          body: JSON.stringify({
-            onPlayerId: Number($("#bet-player").value),
-            stake: Number($("#bet-stake").value),
-          }),
+          body: JSON.stringify({ onPlayerId: target.id, stake }),
         });
+        betDraft = { onPlayerId: null, stake: 10 };
         await reload();
       } catch (err) { $("#live-error").textContent = err.message; }
     });
   }
+
+  host.querySelectorAll(".cancel-bet").forEach((cbtn) =>
+    cbtn.addEventListener("click", async () => {
+      if (!confirm("Cancel this bet? Your points are returned.")) return;
+      try {
+        await api(`/api/games/${live.id}/bets/${cbtn.dataset.bet}`, { method: "DELETE" });
+        await reload();
+      } catch (err) { $("#live-error").textContent = err.message; }
+    }),
+  );
 }
 
 function renderStartForm() {
@@ -646,14 +699,19 @@ function bindEvents() {
 
 async function refreshState() {
   if (document.hidden) return;
+  // Never re-render under the user's fingers: while the bet form has focus
+  // (dropdown open, stake being typed) skip this tick entirely.
+  const activeEl = document.activeElement;
+  const betsBox = $("#live-bets");
+  if (activeEl && betsBox && betsBox.contains(activeEl)) return;
   try {
     const fresh = await api("/api/state");
-    const wasLive = !!liveGame();
-    const nowLive = !!(fresh.activeSeason && fresh.activeSeason.runningGame);
+    const wasLive = Boolean(state && state.activeSeason && state.activeSeason.runningGame);
+    const nowLive = Boolean(fresh.activeSeason && fresh.activeSeason.runningGame);
     state = fresh;
     if (wasLive || nowLive) render();
     else { renderStandings(); renderSeasonLabel(); }
-  } catch { /* transient network hiccup — retry on next tick */ }
+  } catch { /* transient network error — next tick retries */ }
 }
 
 // --- Boot ---

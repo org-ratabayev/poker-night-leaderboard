@@ -9,6 +9,7 @@ import { openDb } from "./db";
 import {
   error,
   handleArchiveSeason,
+  handleCancelBet,
   handleCreateSeason,
   handleDeleteGame,
   handleEliminate,
@@ -145,6 +146,11 @@ export function createApp(db: Database, config: AppConfig): (req: Request) => Pr
       pattern: /^\/api\/games\/(\d+)\/bets$/,
       method: "POST",
       handler: (req, _url, m) => handlePlaceBet(ctx, req, Number(m[1])),
+    },
+    {
+      pattern: /^\/api\/games\/(\d+)\/bets\/(\d+)$/,
+      method: "DELETE",
+      handler: (req, _url, m) => handleCancelBet(ctx, req, Number(m[1]), Number(m[2])),
     },
     {
       pattern: /^\/api\/games\/(\d+)$/,

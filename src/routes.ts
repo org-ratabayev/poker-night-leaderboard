@@ -631,6 +631,31 @@ export async function handlePlaceBet(ctx: Ctx, req: Request, gameId: number): Pr
   return json({ ok: true, available: balance - committed - stake }, 201);
 }
 
+/** DELETE /api/games/:id/bets/:betId — cancel your own bet before the lock. */
+export async function handleCancelBet(
+  ctx: Ctx,
+  req: Request,
+  gameId: number,
+  betId: number,
+): Promise<Response> {
+  const user = await loadCurrentPlayer(ctx.db, ctx.sessionSecret, req);
+  if (!user) return error("Not logged in", 401);
+
+  const game = ctx.db.query("SELECT * FROM games WHERE id = ?").get(gameId) as GameRow | null;
+  if (!game) return error("Game not found", 404);
+  if (game.status !== "running") return error("Game is not running", 400);
+  if (game.bets_locked === 1) return error("Betting is locked — the first player is already out", 409);
+
+  const bet = ctx.db
+    .query("SELECT id, bettor_id FROM bets WHERE id = ? AND game_id = ?")
+    .get(betId, gameId) as { id: number; bettor_id: number } | null;
+  if (!bet) return error("Bet not found", 404);
+  if (bet.bettor_id !== user.id) return error("You can only cancel your own bet", 403);
+
+  ctx.db.query("DELETE FROM bets WHERE id = ?").run(betId);
+  return json({ ok: true });
+}
+
 /** POST /api/games/:id/undo — revert the last step (elimination or the win). */
 export async function handleUndo(ctx: Ctx, req: Request, gameId: number): Promise<Response> {
   const auth = await requireAdmin(ctx, req);
