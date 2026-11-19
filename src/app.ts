@@ -60,6 +60,13 @@ function loadStatic(): Map<string, { body: Uint8Array; type: string }> {
   return files;
 }
 
+/** Short content hash — used to version asset URLs so caches can never go stale. */
+function contentHash(body: Uint8Array): string {
+  // Bun.hash returns number|bigint depending on the runtime version; toString
+  // works for both (negative results are sanitised out for a URL-safe token).
+  return Bun.hash(body).toString(36).replace("-", "").slice(0, 8);
+}
+
 // --- Request plumbing ---
 
 function originAllowed(req: Request, url: URL): boolean {
@@ -76,11 +83,31 @@ export function createApp(db: Database, config: AppConfig): (req: Request) => Pr
   const ctx: Ctx = { db, points: config.points, inviteCode: config.inviteCode, sessionSecret: config.sessionSecret };
   const staticFiles = loadStatic();
 
+  // Asset versions: proxies (Cloudflare) cache .js/.css aggressively and can
+  // override origin cache headers, so the HTML points at versioned URLs.
+  const appVersion = staticFiles.has("app.js") ? contentHash(staticFiles.get("app.js")!.body) : "0";
+  const cssVersion = staticFiles.has("style.css") ? contentHash(staticFiles.get("style.css")!.body) : "0";
+
   function serveStatic(name: string): Response {
     const file = staticFiles.get(name);
     if (!file) return error("Not found", 404);
+    // index.html must never be cached: it carries the asset versions.
+    if (name === "index.html") {
+      const html = new TextDecoder()
+        .decode(file.body)
+        .replaceAll("__V_APP__", appVersion)
+        .replaceAll("__V_CSS__", cssVersion);
+      return new Response(html, {
+        headers: { "Content-Type": file.type, "Cache-Control": "no-store" },
+      });
+    }
+    // Versioned asset URLs never change content → safe to cache hard.
+    const immutable = name === "app.js" || name === "style.css";
     return new Response(file.body, {
-      headers: { "Content-Type": file.type, "Cache-Control": "no-cache" },
+      headers: {
+        "Content-Type": file.type,
+        "Cache-Control": immutable ? "public, max-age=31536000, immutable" : "no-store",
+      },
     });
   }
 
