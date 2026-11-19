@@ -66,6 +66,12 @@ function ordinal(n) {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
+/** Round avatar bubble: the character emoji on a colour derived from the nickname. */
+function avatarHtml(name, avatar, size = "md") {
+  const hue = [...String(name)].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 0) % 360;
+  return `<span class="avatar avatar-${size}" style="--hue:${hue}" title="${esc(name)}">${esc(avatar || "🃏")}</span>`;
+}
+
 async function api(path, options = {}) {
   const res = await fetch(path, {
     credentials: "same-origin",
@@ -118,7 +124,7 @@ function renderUserbox() {
   if (!state.me) { box.innerHTML = ""; return; }
   const admin = state.me.isAdmin ? " <span class='admin-badge'>admin</span>" : "";
   box.innerHTML =
-    `<span>👤 ${esc(state.me.name)}${admin}</span>` +
+    `<span class="name-cell">${avatarHtml(state.me.name, state.me.avatar)} <span>${esc(state.me.name)}</span>${admin}</span>` +
     `<button class="ghost small" id="logout-btn">Log out</button>`;
   $("#logout-btn").addEventListener("click", async () => {
     await api("/api/auth/logout", { method: "POST" });
@@ -155,7 +161,7 @@ function renderStandings() {
       const medal = rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : rank;
       return `<tr class="${rank === 1 ? "rank-1" : ""}">
         <td><span class="pos">${medal}</span></td>
-        <td>${esc(row.player.name)}</td>
+        <td><span class="name-cell">${avatarHtml(row.player.name, row.player.avatar)} ${esc(row.player.name)}</span></td>
         <td>${row.games}</td>
         <td>${row.bets ? row.bets : "—"}</td>
         <td class="num">${row.points}</td>
@@ -222,7 +228,7 @@ function renderLive(live, admin) {
     live.remaining
       .map(
         (p) => `<div class="player-item">
-          <span>🃏 ${esc(p.name)}</span>
+          <span class="name-cell">${avatarHtml(p.name, p.avatar)} ${esc(p.name)}</span>
           ${admin ? `<button class="danger small elim-btn" data-id="${p.id}" data-name="${esc(p.name)}">Eliminated</button>` : ""}
         </div>`,
       )
@@ -233,7 +239,7 @@ function renderLive(live, admin) {
       live.eliminated
         .map(
           (e) => `<div class="player-item muted-line">
-            <span>${esc(e.name)}</span>
+            <span class="name-cell">${avatarHtml(e.name, e.avatar, "sm")} ${esc(e.name)}</span>
             <span class="muted">${ordinal(e.position)} place</span>
           </div>`,
         )
@@ -303,7 +309,7 @@ function renderLiveBets(live) {
       html += `<div class="bet-list">${b.all
         .map(
           (x) =>
-            `<div class="bet-item"><span>${esc(x.bettorName)} → <b>${esc(x.onName)}</b></span><span class="muted">${x.stake} pts</span></div>`,
+            `<div class="bet-item"><span class="name-cell">${avatarHtml(x.bettorName, x.bettorAvatar, "sm")} ${esc(x.bettorName)} → ${avatarHtml(x.onName, x.onAvatar, "sm")} <b>${esc(x.onName)}</b></span><span class="muted">${x.stake} pts</span></div>`,
         )
         .join("")}</div><p class="muted small">Pool: ${b.pool} pts</p>`;
     } else {
@@ -315,7 +321,7 @@ function renderLiveBets(live) {
     html += `<h3>Your bets</h3><div class="bet-list">${b.mine
       .map(
         (x) =>
-          `<div class="bet-item"><span>on <b>${esc(x.onName)}</b></span><span class="muted">${x.stake} pts</span></div>`,
+          `<div class="bet-item"><span class="name-cell">on ${avatarHtml(x.onName, x.onAvatar, "sm")} <b>${esc(x.onName)}</b></span><span class="muted">${x.stake} pts</span></div>`,
       )
       .join("")}</div>`;
   }
@@ -382,14 +388,14 @@ function renderHistory() {
           ${isAdmin() ? `<button class="danger small game-del" data-id="${g.id}">Delete</button>` : ""}
         </div>
         <div class="gresults">
-          ${g.results.map((r) => `<div><b>${r.position}.</b> ${esc(r.name)} <span class="pts">+${r.points}</span></div>`).join("")}
+          ${g.results.map((r) => `<div class="name-cell">${avatarHtml(r.name, r.avatar, "sm")} <span><b>${r.position}.</b> ${esc(r.name)}</span> <span class="pts">+${r.points}</span></div>`).join("")}
         </div>
         ${(g.bets && g.bets.length)
           ? `<div class="gbets"><h4>🎲 Bets</h4>${g.bets
               .map((b) => {
                 const outcome =
                   b.payout === 0 ? "lost" : b.payout > b.stake ? `won +${b.payout - b.stake}` : "returned";
-                return `<div class="bet-item"><span>${esc(b.bettorName)} → <b>${esc(b.onName)}</b></span><span class="muted">${b.stake} pts · ${outcome}</span></div>`;
+                return `<div class="bet-item"><span class="name-cell">${avatarHtml(b.bettorName, b.bettorAvatar, "sm")} ${esc(b.bettorName)} → ${avatarHtml(b.onName, b.onAvatar, "sm")} <b>${esc(b.onName)}</b></span><span class="muted">${b.stake} pts · ${outcome}</span></div>`;
               })
               .join("")}</div>`
           : ""}
@@ -450,10 +456,11 @@ function renderPlayers() {
   list.innerHTML = state.players
     .map(
       (p) => `<div class="player-item">
-        <span>${esc(p.name)}${p.isAdmin ? " <span class='admin-badge'>admin</span>" : ""}</span>
+        <span class="name-cell">${avatarHtml(p.name, p.avatar)} <span>${esc(p.name)}</span>${p.isAdmin ? " <span class='admin-badge'>admin</span>" : ""}</span>
         ${admin ? `<span>
             <input type="text" class="rename-input" data-id="${p.id}" value="${esc(p.name)}" maxlength="30" style="width:140px;margin-top:0">
             <button class="ghost small rename-btn" data-id="${p.id}">Rename</button>
+            <button class="ghost small avatar-btn" data-id="${p.id}" title="Change avatar">🎭</button>
             ${p.id !== state.me.id ? `<button class="ghost small admin-toggle" data-id="${p.id}" data-admin="${p.isAdmin ? 1 : 0}">${p.isAdmin ? "Revoke admin" : "Make admin"}</button>` : ""}
           </span>` : ""}
       </div>`,
@@ -475,6 +482,60 @@ function renderPlayers() {
       await reload();
     }),
   );
+  list.querySelectorAll(".avatar-btn").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      avatarTarget = Number(btn.dataset.id);
+      renderAvatarPanel();
+      $("#avatar-panel").scrollIntoView({ behavior: "smooth", block: "start" });
+    }),
+  );
+}
+
+// --- Avatars ---
+
+let avatarTarget = null; // player id whose avatar is being edited (null = me)
+
+function renderAvatarPanel() {
+  const panel = $("#avatar-panel");
+  const me = state.me;
+  if (!panel || !me) return;
+  const target = avatarTarget ?? me.id;
+  const player = (state.players || []).find((p) => p.id === target) || me;
+  const isSelf = player.id === me.id;
+
+  $("#avatar-title").textContent = isSelf ? "🎭 Your avatar" : `🎭 Avatar for ${player.name}`;
+  $("#avatar-current").innerHTML =
+    avatarHtml(player.name, player.avatar, "lg") +
+    `<span class="muted small">${esc(player.name)} — ${isSelf ? "this is you" : "editing as admin"}</span>`;
+
+  const avatars = state.avatars || [];
+  $("#avatar-grid").innerHTML = avatars
+    .map(
+      (a) =>
+        `<button class="avatar-pick${a === player.avatar ? " active" : ""}" data-avatar="${a}" title="${a}">${a}</button>`,
+    )
+    .join("");
+  $("#avatar-grid").querySelectorAll(".avatar-pick").forEach((btn) =>
+    btn.addEventListener("click", () => saveAvatar(target, btn.dataset.avatar)),
+  );
+  $("#avatar-auto").onclick = () => saveAvatar(target, null);
+  $("#avatar-random").onclick = () => {
+    if (avatars.length === 0) return;
+    saveAvatar(target, avatars[Math.floor(Math.random() * avatars.length)]);
+  };
+}
+
+async function saveAvatar(playerId, avatar) {
+  try {
+    await api(`/api/players/${playerId}/avatar`, {
+      method: "POST",
+      body: JSON.stringify({ avatar }),
+    });
+    avatarTarget = null;
+    await reload();
+  } catch (err) {
+    $("#avatar-title").textContent = `🎭 ${err.message}`;
+  }
 }
 
 // --- Root render ---
@@ -489,6 +550,7 @@ function render() {
   renderGames();
   renderSeasons();
   renderPlayers();
+  renderAvatarPanel();
 }
 
 // --- Events ---

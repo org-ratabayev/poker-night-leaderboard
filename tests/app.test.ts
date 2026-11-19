@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { openDb } from "../src/db";
 import { parsePointsTable, pointsForPosition, formulaPoints, DEFAULT_POINTS_TABLE } from "../src/points";
 import { seasonalTheme } from "../src/routes";
+import { AVATARS, autoAvatar } from "../src/avatars";
 import { createApp } from "../src/app";
 
 let dataDir: string;
@@ -473,6 +474,62 @@ describe("betting", () => {
     };
     const game = state.activeSeason.games.find((g) => g.id === gameId)!;
     expect(game.bets[0].payout).toBe(game.bets[0].stake); // refunded
+  });
+});
+
+// --- Avatars ---
+
+describe("avatars", () => {
+  test("auto avatar is deterministic and keyword-aware", () => {
+    expect(autoAvatar("anton")).toBe("🐜"); // "ant"
+    expect(autoAvatar("Anton")).toBe("🐜"); // case-insensitive
+    expect(autoAvatar("kingKong")).toBe("👑");
+    expect(autoAvatar("Vini")).toBe("🍷"); // "vin"
+    expect(autoAvatar("boni")).toBe("🍬"); // "bon"
+    expect(autoAvatar("Ruslan")).toBe(autoAvatar("Ruslan")); // stable
+    expect(AVATARS).toContain(autoAvatar("Ruslan"));
+    expect(AVATARS).toContain(autoAvatar("Eva"));
+  });
+
+  test("state exposes player avatars and the picker list", async () => {
+    const body = (await (await req("GET", "/api/state", undefined, adminCookie)).json()) as {
+      players: { name: string; avatar: string }[];
+      avatars: string[];
+      me: { avatar: string };
+    };
+    expect(body.avatars.length).toBeGreaterThan(30);
+    expect(body.players.every((p) => typeof p.avatar === "string" && p.avatar.length > 0)).toBe(true);
+    expect(body.avatars).toContain(body.me.avatar);
+  });
+
+  test("a player can choose an avatar", async () => {
+    const res = await req("POST", "/api/players/1/avatar", { avatar: "🤡" }, adminCookie);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { avatar: string }).avatar).toBe("🤡");
+    const state = (await (await req("GET", "/api/state", undefined, adminCookie)).json()) as {
+      me: { avatar: string };
+    };
+    expect(state.me.avatar).toBe("🤡");
+  });
+
+  test("players cannot change someone else's avatar", async () => {
+    const res = await req("POST", "/api/players/1/avatar", { avatar: "🤡" }, playerCookie);
+    expect(res.status).toBe(403);
+  });
+
+  test("invalid avatar rejected", async () => {
+    expect((await req("POST", "/api/players/1/avatar", { avatar: "🚀" }, adminCookie)).status).toBe(400);
+    expect((await req("POST", "/api/players/1/avatar", { avatar: "<script>" }, adminCookie)).status).toBe(400);
+    expect((await req("POST", "/api/players/1/avatar", {}, adminCookie)).status).toBe(400);
+  });
+
+  test("null resets to the auto avatar", async () => {
+    const res = await req("POST", "/api/players/1/avatar", { avatar: null }, adminCookie);
+    expect(res.status).toBe(200);
+    const state = (await (await req("GET", "/api/state", undefined, adminCookie)).json()) as {
+      me: { avatar: string };
+    };
+    expect(state.me.avatar).toBe(autoAvatar("Ruslan"));
   });
 });
 

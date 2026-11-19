@@ -20,6 +20,11 @@ simple, the deployment is fully automated, and pull requests are welcome.
   stakes are split among those who backed the winner; if nobody backed the
   winner, all stakes are refunded. Betting P/L is added to the season
   standings. The admin follows exactly the same rules as everyone else.
+- **Funny avatars** — every player gets a character emoji picked automatically
+  from the nickname (a telling word like “ant” → 🐜, “king” → 👑, otherwise a
+  stable hash). Nobody can pick a silly one by hand: players choose their own
+  character from ~60, or hit “Random”. Admin can set anyone's avatar.
+  No external avatar services — nothing leaves the server.
 - **Live game tracking** — the admin starts a game with the players at the
   table, then marks players as they bust out. The first player out gets the
   worst position, the last one standing wins (1st place). Everyone else can

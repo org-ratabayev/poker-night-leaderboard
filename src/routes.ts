@@ -16,6 +16,7 @@ import type { Database } from "bun:sqlite";
 import type { PlayerRow, GameRow } from "./db";
 import { clearSetting, getSetting, setSetting } from "./db";
 import { formulaPoints } from "./points";
+import { AVATARS, avatarFor, isValidAvatar } from "./avatars";
 import {
   clearSessionCookie,
   clientIp,
@@ -66,7 +67,7 @@ function validateDate(d: string): boolean {
 }
 
 export interface StandingsRow {
-  player: { id: number; name: string };
+  player: { id: number; name: string; avatar: string };
   games: number;
   bets: number;
   points: number;
@@ -100,7 +101,7 @@ function standingsForSeason(db: Database, seasonId: number): StandingsRow[] {
          WHERE g.season_id = ? AND g.status = 'finished'
          GROUP BY b.bettor_id
        )
-       SELECT p.id, p.name,
+       SELECT p.id, p.name, p.avatar,
               COALESCE(gp.games, 0) AS games,
               COALESCE(bp.bets, 0) AS bets,
               COALESCE(gp.pts, 0) + COALESCE(bp.pts, 0) AS pts
@@ -109,11 +110,18 @@ function standingsForSeason(db: Database, seasonId: number): StandingsRow[] {
        LEFT JOIN bp ON bp.pid = p.id
        ORDER BY pts DESC, p.name COLLATE NOCASE ASC`,
     )
-    .all(seasonId, seasonId) as { id: number; name: string; games: number; bets: number; pts: number }[];
+    .all(seasonId, seasonId) as {
+      id: number;
+      name: string;
+      avatar: string | null;
+      games: number;
+      bets: number;
+      pts: number;
+    }[];
   // Re-sort after adding the bank (the SQL ordering only ranks the deltas).
   return rows
     .map((r) => ({
-      player: { id: r.id, name: r.name },
+      player: { id: r.id, name: r.name, avatar: avatarFor(r.name, r.avatar) },
       games: r.games,
       bets: r.bets,
       points: base + r.pts,
@@ -131,11 +139,17 @@ function finishedGames(db: Database, seasonId: number, limit = 100): unknown[] {
   return games.map((g) => {
     const results = db
       .query(
-        `SELECT r.player_id, p.name, r.position, r.points
+        `SELECT r.player_id, p.name, p.avatar, r.position, r.points
          FROM results r JOIN players p ON p.id = r.player_id
          WHERE r.game_id = ? ORDER BY r.position ASC`,
       )
-      .all(g.id) as { player_id: number; name: string; position: number; points: number }[];
+      .all(g.id) as {
+      player_id: number;
+      name: string;
+      avatar: string | null;
+      position: number;
+      points: number;
+    }[];
     const creator = g.created_by
       ? (db.query("SELECT name FROM players WHERE id = ?").get(g.created_by) as { name: string } | null)
       : null;
@@ -149,13 +163,15 @@ function finishedGames(db: Database, seasonId: number, limit = 100): unknown[] {
       results: results.map((r) => ({
         playerId: r.player_id,
         name: r.name,
+        avatar: avatarFor(r.name, r.avatar),
         position: r.position,
         points: r.points,
       })),
       bets: db
         .query(
-          `SELECT b.bettor_id AS bettorId, bp.name AS bettorName,
-                  b.on_player_id AS onPlayerId, op.name AS onName, b.stake, b.payout
+          `SELECT b.bettor_id AS bettorId, bp.name AS bettorName, bp.avatar AS bettorAvatar,
+                  b.on_player_id AS onPlayerId, op.name AS onName, op.avatar AS onAvatar,
+                  b.stake, b.payout
            FROM bets b
            JOIN players bp ON bp.id = b.bettor_id
            JOIN players op ON op.id = b.on_player_id
@@ -174,18 +190,23 @@ function runningGame(db: Database, seasonId: number, viewerId: number | null): u
   if (!game) return null;
   const rows = db
     .query(
-      `SELECT r.player_id, p.name, r.position
+      `SELECT r.player_id, p.name, p.avatar, r.position
        FROM results r JOIN players p ON p.id = r.player_id
        WHERE r.game_id = ?`,
     )
-    .all(game.id) as { player_id: number; name: string; position: number | null }[];
+    .all(game.id) as { player_id: number; name: string; avatar: string | null; position: number | null }[];
   const remaining = rows
     .filter((r) => r.position === null)
-    .map((r) => ({ id: r.player_id, name: r.name }))
+    .map((r) => ({ id: r.player_id, name: r.name, avatar: avatarFor(r.name, r.avatar) }))
     .sort((a, b) => a.name.localeCompare(b.name));
   const eliminated = rows
     .filter((r) => r.position !== null)
-    .map((r) => ({ id: r.player_id, name: r.name, position: r.position as number }))
+    .map((r) => ({
+      id: r.player_id,
+      name: r.name,
+      avatar: avatarFor(r.name, r.avatar),
+      position: r.position as number,
+    }))
     .sort((a, b) => b.position - a.position); // first player out first
   const locked = game.bets_locked === 1;
   // My own bets are always visible to me; everybody's bets only after the lock
@@ -193,7 +214,8 @@ function runningGame(db: Database, seasonId: number, viewerId: number | null): u
   const mine = viewerId
     ? (db
         .query(
-          `SELECT b.id, b.on_player_id AS onPlayerId, p.name AS onName, b.stake, b.created_at AS createdAt
+          `SELECT b.id, b.on_player_id AS onPlayerId, p.name AS onName, p.avatar AS onAvatar,
+                  b.stake, b.created_at AS createdAt
            FROM bets b JOIN players p ON p.id = b.on_player_id
            WHERE b.game_id = ? AND b.bettor_id = ? ORDER BY b.id`,
         )
@@ -202,8 +224,8 @@ function runningGame(db: Database, seasonId: number, viewerId: number | null): u
   const all = locked
     ? (db
         .query(
-          `SELECT b.bettor_id AS bettorId, bp.name AS bettorName,
-                  b.on_player_id AS onPlayerId, op.name AS onName, b.stake
+          `SELECT b.bettor_id AS bettorId, bp.name AS bettorName, bp.avatar AS bettorAvatar,
+                  b.on_player_id AS onPlayerId, op.name AS onName, op.avatar AS onAvatar, b.stake
            FROM bets b
            JOIN players bp ON bp.id = b.bettor_id
            JOIN players op ON op.id = b.on_player_id
@@ -257,7 +279,13 @@ function seasonSummary(db: Database, season: { id: number; name: string; prize: 
 }
 
 function publicPlayer(p: PlayerRow): unknown {
-  return { id: p.id, name: p.name, isAdmin: p.is_admin === 1, joinedAt: p.created_at };
+  return {
+    id: p.id,
+    name: p.name,
+    isAdmin: p.is_admin === 1,
+    avatar: avatarFor(p.name, p.avatar),
+    joinedAt: p.created_at,
+  };
 }
 
 // --- Theme ---
@@ -311,11 +339,12 @@ export async function handleState(ctx: Ctx, req: Request): Promise<Response> {
     }[]
   ).map((s) => seasonSummary(ctx.db, s));
   const players = (
-    ctx.db.query("SELECT id, name FROM players ORDER BY name COLLATE NOCASE ASC").all() as {
+    ctx.db.query("SELECT id, name, avatar FROM players ORDER BY name COLLATE NOCASE ASC").all() as {
       id: number;
       name: string;
+      avatar: string | null;
     }[]
-  ).map((p) => ({ id: p.id, name: p.name }));
+  ).map((p) => ({ id: p.id, name: p.name, avatar: avatarFor(p.name, p.avatar) }));
 
   const today = todayUtc();
   const todayHasGame =
@@ -335,6 +364,7 @@ export async function handleState(ctx: Ctx, req: Request): Promise<Response> {
       : null,
     seasons,
     players,
+    avatars: [...AVATARS],
     pointsTable: ctx.points,
     today,
     todayHasGame,
@@ -700,6 +730,26 @@ export async function handleRenamePlayer(ctx: Ctx, req: Request, playerId: numbe
   const res = ctx.db.query("UPDATE players SET name = ? WHERE id = ?").run(name, playerId);
   if (res.changes === 0) return error("Player not found", 404);
   return json({ ok: true });
+}
+
+/** POST /api/players/:id/avatar { avatar } — self or admin; null = back to auto. */
+export async function handleSetAvatar(ctx: Ctx, req: Request, playerId: number): Promise<Response> {
+  const user = await loadCurrentPlayer(ctx.db, ctx.sessionSecret, req);
+  if (!user) return error("Not logged in", 401);
+  if (user.id !== playerId && user.is_admin !== 1) {
+    return error("You can only change your own avatar", 403);
+  }
+  const body = (await req.json().catch(() => null)) as { avatar?: unknown } | null;
+  const avatar = body?.avatar;
+  if (avatar === undefined || !isValidAvatar(avatar)) return error("Invalid avatar");
+
+  const res = ctx.db.query("UPDATE players SET avatar = ? WHERE id = ?").run(avatar, playerId);
+  if (res.changes === 0) return error("Player not found", 404);
+  const player = ctx.db.query("SELECT name, avatar FROM players WHERE id = ?").get(playerId) as {
+    name: string;
+    avatar: string | null;
+  };
+  return json({ ok: true, avatar: avatarFor(player.name, player.avatar) });
 }
 
 export async function handleSetAdmin(ctx: Ctx, req: Request, playerId: number): Promise<Response> {

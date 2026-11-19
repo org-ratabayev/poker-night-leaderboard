@@ -241,3 +241,26 @@ body.theme-christmas footer::after { content: " · 🎅 Merry Christmas!"; color
 .gbets { margin-top: 0.6rem; border-top: 1px solid var(--border); padding-top: 0.4rem; }
 .gbets h4 { margin: 0.2rem 0 0.3rem; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); }
 .small { font-size: 0.8rem; }
+
+/* --- Avatars --- */
+.name-cell { display: inline-flex; align-items: center; gap: 0.45rem; }
+.avatar {
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; flex: none; line-height: 1;
+  background: hsl(var(--hue, 150) 45% 26%);
+  border: 1px solid hsl(var(--hue, 150) 55% 42%);
+}
+.avatar-md { width: 28px; height: 28px; font-size: 16px; }
+.avatar-sm { width: 22px; height: 22px; font-size: 13px; }
+.avatar-lg { width: 46px; height: 46px; font-size: 26px; }
+.avatar-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr));
+  gap: 0.35rem; max-height: 210px; overflow-y: auto; margin: 0.6rem 0;
+}
+.avatar-pick {
+  font-size: 1.25rem; padding: 0.3rem; border-radius: 10px;
+  background: var(--panel2); border: 1px solid var(--border); cursor: pointer;
+}
+.avatar-pick:hover { border-color: var(--gold); }
+.avatar-pick.active { border-color: var(--gold); box-shadow: 0 0 0 2px rgba(255, 215, 0, 0.35); }
+.avatar-current-row { display: flex; align-items: center; gap: 0.7rem; margin-bottom: 0.4rem; }

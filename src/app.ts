@@ -21,6 +21,7 @@ import {
   handleRenamePlayer,
   handleSeason,
   handleSetAdmin,
+  handleSetAvatar,
   handleSetTheme,
   handleStartGame,
   handleState,
@@ -154,6 +155,7 @@ export function createApp(db: Database, config: AppConfig): (req: Request) => Pr
     { pattern: /^\/api\/settings\/theme$/, method: "POST", handler: (req) => handleSetTheme(ctx, req) },
     { pattern: /^\/api\/seasons\/(\d+)\/archive$/, method: "POST", handler: (req, _url, m) => handleArchiveSeason(ctx, req, Number(m[1])) },
     { pattern: /^\/api\/players\/(\d+)\/rename$/, method: "POST", handler: (req, _url, m) => handleRenamePlayer(ctx, req, Number(m[1])) },
+    { pattern: /^\/api\/players\/(\d+)\/avatar$/, method: "POST", handler: (req, _url, m) => handleSetAvatar(ctx, req, Number(m[1])) },
     { pattern: /^\/api\/players\/(\d+)\/admin$/, method: "POST", handler: (req, _url, m) => handleSetAdmin(ctx, req, Number(m[1])) },
   ];
 

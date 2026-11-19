@@ -18,6 +18,7 @@ export interface PlayerRow {
   name: string;
   pass_hash: string;
   is_admin: number;
+  avatar: string | null; // chosen character emoji; NULL = auto by name
   created_at: string;
 }
 
@@ -131,6 +132,11 @@ function migrate(db: Database): void {
   `);
 
   // --- migrations for databases created by older versions ---
+
+  const playerCols = tableColumns(db, "players");
+  if (!playerCols.includes("avatar")) {
+    db.exec("ALTER TABLE players ADD COLUMN avatar TEXT;");
+  }
 
   const seasonCols = tableColumns(db, "seasons");
   if (!seasonCols.includes("prize")) {
