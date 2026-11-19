@@ -77,8 +77,12 @@ export const MIN_STAKE = 5;
 export const MAX_STAKE = 100;
 
 function standingsForSeason(db: Database, seasonId: number): StandingsRow[] {
-  // Season points = tournament points from finished games + betting P/L
-  // (payout − stake) from finished games.
+  // Season points = starting bank + tournament points from finished games +
+  // betting P/L (payout − stake) from finished games.
+  const base =
+    (db.query("SELECT starting_points FROM seasons WHERE id = ?").get(seasonId) as {
+      starting_points: number;
+    } | null)?.starting_points ?? 0;
   const rows = db
     .query(
       `WITH gp AS (
@@ -99,20 +103,22 @@ function standingsForSeason(db: Database, seasonId: number): StandingsRow[] {
        SELECT p.id, p.name,
               COALESCE(gp.games, 0) AS games,
               COALESCE(bp.bets, 0) AS bets,
-              COALESCE(gp.pts, 0) + COALESCE(bp.pts, 0) AS points
+              COALESCE(gp.pts, 0) + COALESCE(bp.pts, 0) AS pts
        FROM players p
        LEFT JOIN gp ON gp.pid = p.id
        LEFT JOIN bp ON bp.pid = p.id
-       WHERE gp.games IS NOT NULL OR bp.pid IS NOT NULL
-       ORDER BY points DESC, p.name COLLATE NOCASE ASC`,
+       ORDER BY pts DESC, p.name COLLATE NOCASE ASC`,
     )
-    .all(seasonId, seasonId) as { id: number; name: string; games: number; bets: number; points: number }[];
-  return rows.map((r) => ({
-    player: { id: r.id, name: r.name },
-    games: r.games,
-    bets: r.bets,
-    points: r.points,
-  }));
+    .all(seasonId, seasonId) as { id: number; name: string; games: number; bets: number; pts: number }[];
+  // Re-sort after adding the bank (the SQL ordering only ranks the deltas).
+  return rows
+    .map((r) => ({
+      player: { id: r.id, name: r.name },
+      games: r.games,
+      bets: r.bets,
+      points: base + r.pts,
+    }))
+    .sort((a, b) => b.points - a.points || a.player.name.localeCompare(b.player.name));
 }
 
 /** Finished games only — used for the history list. */
@@ -246,7 +252,7 @@ function seasonSummary(db: Database, season: { id: number; name: string; prize: 
     name: season.name,
     prize: season.prize,
     archived: season.archived_at !== null,
-    champion: standings.length > 0 ? standings[0].player : null,
+    champion: standings.find((r) => r.games > 0 || r.bets > 0)?.player ?? null,
   };
 }
 
@@ -351,7 +357,7 @@ export async function handleSeason(ctx: Ctx, _req: Request, seasonId: number): P
     name: season.name,
     prize: season.prize,
     archived: season.archived_at !== null,
-    champion: standings.length > 0 ? standings[0].player : null,
+    champion: standings.find((r) => r.games > 0 || r.bets > 0)?.player ?? null,
     standings,
     games: finishedGames(ctx.db, season.id),
   });
@@ -569,7 +575,10 @@ export async function handlePlaceBet(ctx: Ctx, req: Request, gameId: number): Pr
   const participates = ctx.db
     .query("SELECT 1 AS x FROM results WHERE game_id = ? AND player_id = ?")
     .get(gameId, user.id);
-  if (participates) return error("Players in the game cannot bet on it", 403);
+  const isParticipant = Boolean(participates);
+  if (isParticipant && onPlayerId === user.id) {
+    return error("You cannot bet on yourself", 400);
+  }
 
   const onPlayer = ctx.db
     .query("SELECT 1 AS x FROM results WHERE game_id = ? AND player_id = ?")

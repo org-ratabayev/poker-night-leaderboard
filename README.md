@@ -13,11 +13,12 @@ simple, the deployment is fully automated, and pull requests are welcome.
 - **Points by formula** — 1st place always gets 100; the rest scale by
   `round(100 · (N − position + 1) / N)` (N = players in that game). For 6
   players: 100 / 83 / 67 / 50 / 33 / 17.
-- **Betting between players** — spectators (players not in the current game)
-  wager their own season points on who wins. Bets are **hidden from everyone
-  until the first bust-out**, then locked and revealed. Payouts are parimutuel:
-  losing stakes are split among those who backed the winner; if nobody backed
-  the winner, all stakes are refunded. Betting P/L is added to the season
+- **Betting between players** — every registered player starts a season with a
+  50-point bank. Anyone can wager their points on who wins the current game —
+  **except on themselves** — and bets are **hidden from everyone until the
+  first bust-out**, then locked and revealed. Payouts are parimutuel: losing
+  stakes are split among those who backed the winner; if nobody backed the
+  winner, all stakes are refunded. Betting P/L is added to the season
   standings. The admin follows exactly the same rules as everyone else.
 - **Live game tracking** — the admin starts a game with the players at the
   table, then marks players as they bust out. The first player out gets the

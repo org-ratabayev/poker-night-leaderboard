@@ -233,9 +233,9 @@ describe("games: live tournament", () => {
     expect(results[1].name).toBe("Alex");
     expect(results[1].position).toBe(2);
     expect(results[1].points).toBe(50); // formula: 2 players → last gets 100/2
-    // standings
+    // standings include the 50-point starting bank
     expect(body.activeSeason.standings[0].player.name).toBe("Ruslan");
-    expect(body.activeSeason.standings[0].points).toBe(100);
+    expect(body.activeSeason.standings[0].points).toBe(150);
   });
 
   test("eliminating from a finished game is rejected", async () => {
@@ -254,7 +254,8 @@ describe("games: live tournament", () => {
     expect(state.activeSeason.runningGame).not.toBeNull();
     expect(state.activeSeason.runningGame!.remaining.length).toBe(1);
     expect(state.activeSeason.games.length).toBe(0); // nothing finished → excluded from history
-    expect(state.activeSeason.standings.length).toBe(0); // running games don't count
+    // running games don't count: everybody is back to the 50-point bank
+    expect(state.activeSeason.standings.every((r) => r.points === 50)).toBe(true);
   });
 
   test("undo restores the last eliminated player", async () => {
@@ -329,7 +330,7 @@ describe("games: live tournament", () => {
       todayHasGame: boolean;
     };
     expect(after.activeSeason.games.length).toBe(0);
-    expect(after.activeSeason.standings.length).toBe(0);
+    expect(after.activeSeason.standings.every((r) => r.points === 50)).toBe(true); // bank only
     expect(after.todayHasGame).toBe(false);
   });
 });
@@ -353,10 +354,11 @@ describe("betting", () => {
       activeSeason: { standings: { player: { name: string }; points: number }[] };
     };
     const byName = Object.fromEntries(state.activeSeason.standings.map((r) => [r.player.name, r.points]));
-    expect(byName["Ruslan"]).toBe(100);
-    expect(byName["Alex"]).toBe(75);
-    expect(byName["Vini"]).toBe(50);
-    expect(byName["Eva"]).toBe(25);
+    // game points + 50-point starting bank
+    expect(byName["Ruslan"]).toBe(150);
+    expect(byName["Alex"]).toBe(125);
+    expect(byName["Vini"]).toBe(100);
+    expect(byName["Eva"]).toBe(75);
   });
 
   test("game B starts with two participants", async () => {
@@ -365,10 +367,10 @@ describe("betting", () => {
     gameBId = ((await res.json()) as { gameId: number }).gameId;
   });
 
-  test("participants cannot bet", async () => {
-    // Vini (3) is playing
+  test("participants cannot bet on themselves", async () => {
+    // Alex (2) is playing — betting on himself must be rejected
     const res = await req("POST", `/api/games/${gameBId}/bets`, { onPlayerId: 2, stake: 10 }, playerCookie);
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(400);
   });
 
   test("unauthenticated cannot bet", async () => {
@@ -387,16 +389,18 @@ describe("betting", () => {
     expect(res.status).toBe(400);
   });
 
-  test("spectators bet — the admin exactly like anyone else", async () => {
-    // Ruslan (admin, not playing) backs Alex; Eva backs Vini.
+  test("everyone bets — spectators, the admin and players in the game", async () => {
+    // Ruslan (admin, not playing) backs Alex; Eva backs Vini; Alex (playing) backs Vini.
     const a = await req("POST", `/api/games/${gameBId}/bets`, { onPlayerId: 2, stake: 20 }, adminCookie);
     expect(a.status).toBe(201);
-    const b = await req("POST", `/api/games/${gameBId}/bets`, { onPlayerId: 3, stake: 20 }, evaCookie);
+    const b = await req("POST", `/api/games/${gameBId}/bets`, { onPlayerId: 3, stake: 70 }, evaCookie);
     expect(b.status).toBe(201);
+    const c = await req("POST", `/api/games/${gameBId}/bets`, { onPlayerId: 3, stake: 10 }, playerCookie);
+    expect(c.status).toBe(201);
   });
 
   test("stake cannot exceed the bettor's balance", async () => {
-    // Eva has 25 pts and already committed 20 → 10 more is too much.
+    // Eva has 75 pts and already committed 70 → 10 more is too much.
     const res = await req("POST", `/api/games/${gameBId}/bets`, { onPlayerId: 2, stake: 10 }, evaCookie);
     expect(res.status).toBe(400);
   });
@@ -409,12 +413,12 @@ describe("betting", () => {
     expect(asDirector.activeSeason.runningGame.bets.all).toBeNull();
     expect(asDirector.activeSeason.runningGame.bets.mine.length).toBe(1); // only my own bets
 
-    // A participant sees nobody's bets, not even their own (they have none)
+    // A participant sees only their own bet, never anybody else's
     const asPlayer = await (await req("GET", "/api/state", undefined, playerCookie)).json() as {
       activeSeason: { runningGame: { bets: { all: unknown[] | null; mine: unknown[] } } };
     };
     expect(asPlayer.activeSeason.runningGame.bets.all).toBeNull();
-    expect(asPlayer.activeSeason.runningGame.bets.mine).toEqual([]);
+    expect(asPlayer.activeSeason.runningGame.bets.mine.length).toBe(1);
   });
 
   test("first elimination locks betting and reveals all bets", async () => {
@@ -432,9 +436,12 @@ describe("betting", () => {
     };
     const game = state.activeSeason.games.find((g) => g.id === gameBId)!;
     const byBettor = Object.fromEntries(game.bets.map((b) => [b.bettorName, b]));
-    // Parimutuel: pool 40, winner backed with 20 → Ruslan gets 40 back (+20), Eva loses 20.
-    expect(byBettor["Ruslan"].payout).toBe(40);
+    // Parimutuel: pool = 20 + 70 + 10 = 100, the winner was backed with 20 →
+    // Ruslan takes the whole pool (+80), Eva and Alex lose their stakes.
+    expect(game.bets.length).toBe(3);
+    expect(byBettor["Ruslan"].payout).toBe(100);
     expect(byBettor["Eva"].payout).toBe(0);
+    expect(byBettor["Alex"].payout).toBe(0);
   });
 
   test("betting P/L is reflected in the standings", async () => {
@@ -442,17 +449,13 @@ describe("betting", () => {
       activeSeason: { standings: { player: { name: string }; points: number; bets: number }[] };
     };
     const byName = Object.fromEntries(state.activeSeason.standings.map((r) => [r.player.name, r]));
-    // Ruslan: 100 (game A) + 20 (bet profit)
-    expect(byName["Ruslan"].points).toBe(120);
+    // bank 50 + game points + bet P/L
+    expect(byName["Ruslan"].points).toBe(230); // 50 + 100 + 80
     expect(byName["Ruslan"].bets).toBe(1);
-    // Alex: 75 (game A) + 100 (game B win)
-    expect(byName["Alex"].points).toBe(175);
-    // Vini: 50 + 50
-    expect(byName["Vini"].points).toBe(100);
-    // Eva: 25 − 20
-    expect(byName["Eva"].points).toBe(5);
-    // leader
-    expect(state.activeSeason.standings[0].player.name).toBe("Alex");
+    expect(byName["Alex"].points).toBe(215); // 50 + 75 + 100 − 10
+    expect(byName["Vini"].points).toBe(150); // 50 + 50 + 50
+    expect(byName["Eva"].points).toBe(5); // 50 + 25 − 70
+    expect(state.activeSeason.standings[0].player.name).toBe("Ruslan");
   });
 
   test("stakes are refunded when nobody backed the winner", async () => {

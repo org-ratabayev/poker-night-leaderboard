@@ -275,21 +275,21 @@ function renderLiveBets(live) {
   const b = live.bets;
   const me = state.me;
   if (!b || !me) { host.innerHTML = ""; return; }
-  const inGame =
-    live.remaining.some((p) => p.id === me.id) || live.eliminated.some((p) => p.id === me.id);
   const row = (state.activeSeason.standings || []).find((r) => r.player.id === me.id);
   const myPoints = row ? row.points : 0;
 
   let html = "";
   if (b.open) {
-    if (inGame) {
-      html = `<p class="muted small">You're in the game — betting is for spectators only.</p>`;
+    // Everyone can bet on anyone still in the game — except on themselves.
+    const options = live.remaining
+      .filter((p) => p.id !== me.id)
+      .map((p) => `<option value="${p.id}">${esc(p.name)}</option>`)
+      .join("");
+    if (!options) {
+      html = `<p class="muted small">Nobody to bet on — you're the only player left.</p>`;
     } else if (myPoints < 5) {
-      html = `<p class="muted small">Betting needs at least 5 season points (you have ${myPoints}).</p>`;
+      html = `<p class="muted small">Betting needs at least 5 points (you have ${myPoints}).</p>`;
     } else {
-      const options = live.remaining
-        .map((p) => `<option value="${p.id}">${esc(p.name)}</option>`)
-        .join("");
       html = `<h3>🎲 Bets — open until the first bust-out</h3>
         <div class="bet-form">
           <select id="bet-player">${options}</select>

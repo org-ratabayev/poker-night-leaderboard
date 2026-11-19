@@ -86,6 +86,7 @@ function migrate(db: Database): void {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       prize TEXT,
+      starting_points INTEGER NOT NULL DEFAULT 50,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       archived_at TEXT
     );
@@ -134,6 +135,11 @@ function migrate(db: Database): void {
   const seasonCols = tableColumns(db, "seasons");
   if (!seasonCols.includes("prize")) {
     db.exec("ALTER TABLE seasons ADD COLUMN prize TEXT;");
+  }
+  // Starting bank: every player gets these points at the start of a season so
+  // betting works from the very first game.
+  if (!seasonCols.includes("starting_points")) {
+    db.exec("ALTER TABLE seasons ADD COLUMN starting_points INTEGER NOT NULL DEFAULT 50;");
   }
 
   const gameCols = tableColumns(db, "games");
