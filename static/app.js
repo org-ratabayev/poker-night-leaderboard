@@ -280,13 +280,12 @@ function renderLiveBets(live) {
 
   let html = "";
   if (b.open) {
-    // Everyone can bet on anyone still in the game — except on themselves.
+    // Everyone can bet on anyone still in the game — including themselves.
     const options = live.remaining
-      .filter((p) => p.id !== me.id)
-      .map((p) => `<option value="${p.id}">${esc(p.name)}</option>`)
+      .map((p) => `<option value="${p.id}">${esc(p.name)}${p.id === me.id ? " (you)" : ""}</option>`)
       .join("");
     if (!options) {
-      html = `<p class="muted small">Nobody to bet on — you're the only player left.</p>`;
+      html = `<p class="muted small">Nobody left to bet on.</p>`;
     } else if (myPoints < 5) {
       html = `<p class="muted small">Betting needs at least 5 points (you have ${myPoints}).</p>`;
     } else {

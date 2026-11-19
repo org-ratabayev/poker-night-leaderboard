@@ -15,7 +15,7 @@ simple, the deployment is fully automated, and pull requests are welcome.
   players: 100 / 83 / 67 / 50 / 33 / 17.
 - **Betting between players** — every registered player starts a season with a
   50-point bank. Anyone can wager their points on who wins the current game —
-  **except on themselves** — and bets are **hidden from everyone until the
+  **including on themselves** — and bets are **hidden from everyone until the
   first bust-out**, then locked and revealed. Payouts are parimutuel: losing
   stakes are split among those who backed the winner; if nobody backed the
   winner, all stakes are refunded. Betting P/L is added to the season

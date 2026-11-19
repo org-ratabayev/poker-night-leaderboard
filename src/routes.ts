@@ -572,13 +572,8 @@ export async function handlePlaceBet(ctx: Ctx, req: Request, gameId: number): Pr
   if (game.status !== "running") return error("Game is not running", 400);
   if (game.bets_locked === 1) return error("Betting is locked — the first player is already out", 409);
 
-  const participates = ctx.db
-    .query("SELECT 1 AS x FROM results WHERE game_id = ? AND player_id = ?")
-    .get(gameId, user.id);
-  const isParticipant = Boolean(participates);
-  if (isParticipant && onPlayerId === user.id) {
-    return error("You cannot bet on yourself", 400);
-  }
+  // Note: betting on yourself is allowed — it only reinforces honest play
+  // (you profit only if you actually win).
 
   const onPlayer = ctx.db
     .query("SELECT 1 AS x FROM results WHERE game_id = ? AND player_id = ?")
