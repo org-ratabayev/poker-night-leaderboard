@@ -11,10 +11,14 @@ simple, the deployment is fully automated, and pull requests are welcome.
   season when it's done. The champion 🏆 is recorded for history and a new
   season starts automatically.
 - **Points table** — configurable: `100,75,55,40,30,20,12,8,5,3` by default.
-- **Any player can enter results** — everyone in the group logs the finishing
-  order after a game; positions map to points automatically.
-- **Admin** — the first registered user is admin: manages seasons, renames
-  players, deletes any game, promotes others.
+- **Live game tracking** — the admin starts a game with the players at the
+  table, then marks players as they bust out. The first player out gets the
+  worst position, the last one standing wins (1st place). Everyone else can
+  watch the result live — the page auto-refreshes every 10 seconds.
+- **One game per day, admin-only** — a game can only be started by an admin,
+  and only once per calendar day (with an *undo* for the last elimination).
+- **Admin** — the first registered user is admin: starts/undoes/deletes games,
+  manages seasons, renames players, promotes others.
 - **Mobile-friendly** dark "poker table" UI — works great at the table.
 
 ## Tech stack
@@ -137,8 +141,10 @@ tunnel ingress config and the DNS record.
 | POST   | `/api/auth/register`        | open  | Register (invite code required)      |
 | POST   | `/api/auth/login`           | open  | Log in                               |
 | POST   | `/api/auth/logout`          | user  | Log out                              |
-| POST   | `/api/games`                | user  | Add game results                     |
-| DELETE | `/api/games/:id`            | admin/author | Delete a game               |
+| POST   | `/api/games`                | admin | Start a game (participants, one per day) |
+| POST   | `/api/games/:id/eliminate`  | admin | Mark a player as eliminated          |
+| POST   | `/api/games/:id/undo`       | admin | Undo the last elimination / the win  |
+| DELETE | `/api/games/:id`            | admin | Delete a game                        |
 | POST   | `/api/seasons`              | admin | Create a season (when none active)   |
 | POST   | `/api/seasons/:id/archive`  | admin | Archive + auto-start next season     |
 | POST   | `/api/players/:id/rename`   | admin | Rename a player                      |

@@ -1,8 +1,16 @@
 /**
  * API route handlers. All responses are JSON. Auth checks per route:
  *   - open:      /api/health, /api/state, /api/season/:id
- *   - user:      /api/auth/*, POST /api/games
- *   - admin:     DELETE /api/games/:id (or author), /api/seasons, /api/players/:id/*
+ *   - user:      /api/auth/*, /api/me
+ *   - admin:     starting/eliminating/undoing/deleting games, seasons,
+ *                player management
+ *
+ * Live tournament rules:
+ *   - only an admin starts a game, and only one game per calendar day;
+ *   - only one game can be running at a time;
+ *   - the admin marks players as eliminated: the first player out gets the
+ *     worst position (N), the next N-1, ... the last remaining player wins
+ *     (position 1) and the game finishes with points assigned.
  */
 import type { Database } from "bun:sqlite";
 import type { PlayerRow, GameRow } from "./db";
@@ -14,9 +22,7 @@ import {
   inviteMatches,
   loadCurrentPlayer,
   rateLimited,
-  readCookie,
   resetRateLimit,
-  SESSION_COOKIE,
   setSessionCookie,
   signSession,
   verifyPassword,
@@ -46,7 +52,17 @@ export function error(message: string, status = 400): Response {
   return json({ error: message }, status);
 }
 
-// --- Public shape helpers ---
+// --- Helpers ---
+
+export function todayUtc(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function validateDate(d: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
+  const date = new Date(`${d}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === d;
+}
 
 export interface StandingsRow {
   player: { id: number; name: string };
@@ -61,7 +77,7 @@ function standingsForSeason(db: Database, seasonId: number): StandingsRow[] {
        FROM results r
        JOIN games g ON g.id = r.game_id
        JOIN players p ON p.id = r.player_id
-       WHERE g.season_id = ?
+       WHERE g.season_id = ? AND g.status = 'finished'
        GROUP BY r.player_id
        ORDER BY points DESC, p.name COLLATE NOCASE ASC`,
     )
@@ -73,9 +89,12 @@ function standingsForSeason(db: Database, seasonId: number): StandingsRow[] {
   }));
 }
 
-function gamesForSeason(db: Database, seasonId: number, limit = 100): unknown[] {
+/** Finished games only — used for the history list. */
+function finishedGames(db: Database, seasonId: number, limit = 100): unknown[] {
   const games = db
-    .query("SELECT * FROM games WHERE season_id = ? ORDER BY date DESC, id DESC LIMIT ?")
+    .query(
+      "SELECT * FROM games WHERE season_id = ? AND status = 'finished' ORDER BY date DESC, id DESC LIMIT ?",
+    )
     .all(seasonId, limit) as GameRow[];
   return games.map((g) => {
     const results = db
@@ -94,6 +113,7 @@ function gamesForSeason(db: Database, seasonId: number, limit = 100): unknown[] 
       notes: g.notes,
       createdBy: creator?.name ?? null,
       createdAt: g.created_at,
+      finishedAt: g.finished_at,
       results: results.map((r) => ({
         playerId: r.player_id,
         name: r.name,
@@ -102,6 +122,38 @@ function gamesForSeason(db: Database, seasonId: number, limit = 100): unknown[] 
       })),
     };
   });
+}
+
+/** The live game (status = 'running') for a season, if any. */
+function runningGame(db: Database, seasonId: number): unknown | null {
+  const game = db
+    .query("SELECT * FROM games WHERE season_id = ? AND status = 'running' ORDER BY id DESC LIMIT 1")
+    .get(seasonId) as GameRow | null;
+  if (!game) return null;
+  const rows = db
+    .query(
+      `SELECT r.player_id, p.name, r.position
+       FROM results r JOIN players p ON p.id = r.player_id
+       WHERE r.game_id = ?`,
+    )
+    .all(game.id) as { player_id: number; name: string; position: number | null }[];
+  const remaining = rows
+    .filter((r) => r.position === null)
+    .map((r) => ({ id: r.player_id, name: r.name }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const eliminated = rows
+    .filter((r) => r.position !== null)
+    .map((r) => ({ id: r.player_id, name: r.name, position: r.position as number }))
+    .sort((a, b) => b.position - a.position); // first player out first
+  return {
+    id: game.id,
+    date: game.date,
+    notes: game.notes,
+    startedAt: game.created_at,
+    totalPlayers: rows.length,
+    remaining,
+    eliminated,
+  };
 }
 
 function seasonSummary(db: Database, season: { id: number; name: string; prize: string | null; archived_at: string | null }): unknown {
@@ -145,6 +197,10 @@ export async function handleState(ctx: Ctx, req: Request): Promise<Response> {
     }[]
   ).map((p) => ({ id: p.id, name: p.name }));
 
+  const today = todayUtc();
+  const todayHasGame =
+    (ctx.db.query("SELECT COUNT(*) AS n FROM games WHERE date = ?").get(today) as { n: number }).n > 0;
+
   return json({
     me: user ? publicPlayer(user) : null,
     activeSeason: active
@@ -153,16 +209,19 @@ export async function handleState(ctx: Ctx, req: Request): Promise<Response> {
           name: active.name,
           prize: active.prize,
           standings: standingsForSeason(ctx.db, active.id),
-          games: gamesForSeason(ctx.db, active.id),
+          games: finishedGames(ctx.db, active.id),
+          runningGame: runningGame(ctx.db, active.id),
         }
       : null,
     seasons,
     players,
     pointsTable: ctx.points,
+    today,
+    todayHasGame,
   });
 }
 
-export async function handleSeason(ctx: Ctx, req: Request, seasonId: number): Promise<Response> {
+export async function handleSeason(ctx: Ctx, _req: Request, seasonId: number): Promise<Response> {
   const season = ctx.db.query("SELECT * FROM seasons WHERE id = ?").get(seasonId) as {
     id: number;
     name: string;
@@ -178,7 +237,7 @@ export async function handleSeason(ctx: Ctx, req: Request, seasonId: number): Pr
     archived: season.archived_at !== null,
     champion: standings.length > 0 ? standings[0].player : null,
     standings,
-    games: gamesForSeason(ctx.db, season.id),
+    games: finishedGames(ctx.db, season.id),
   });
 }
 
@@ -260,78 +319,7 @@ export async function handleMe(ctx: Ctx, req: Request): Promise<Response> {
   return json({ me: publicPlayer(user) });
 }
 
-// --- Games ---
-
-function validateDate(d: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return false;
-  const date = new Date(`${d}T00:00:00Z`);
-  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === d;
-}
-
-export async function handleCreateGame(ctx: AuthedCtx, req: Request): Promise<Response> {
-  const body = (await req.json().catch(() => null)) as
-    | { date?: unknown; notes?: unknown; results?: unknown }
-    | null;
-  if (!body) return error("Invalid JSON body");
-  const date = typeof body.date === "string" ? body.date : "";
-  if (!validateDate(date)) return error("Invalid date (expected YYYY-MM-DD)");
-  const notes = typeof body.notes === "string" ? body.notes.trim().slice(0, 500) : null;
-
-  const active = ctx.db.query("SELECT id FROM seasons WHERE archived_at IS NULL ORDER BY id DESC LIMIT 1").get() as { id: number } | null;
-  if (!active) return error("No active season");
-
-  const rawResults = Array.isArray(body.results) ? body.results : [];
-  if (rawResults.length === 0 || rawResults.length > 50) {
-    return error("A game needs 1-50 players");
-  }
-  const results: { playerId: number; position: number }[] = [];
-  const seenPlayers = new Set<number>();
-  const seenPositions = new Set<number>();
-  for (const r of rawResults) {
-    const rp = r as { playerId?: unknown; position?: unknown };
-    if (typeof rp.playerId !== "number" || typeof rp.position !== "number") {
-      return error("Each result needs playerId and position");
-    }
-    if (!Number.isInteger(rp.playerId) || !Number.isInteger(rp.position)) return error("playerId and position must be integers");
-    if (seenPlayers.has(rp.playerId)) return error("Duplicate player in results");
-    if (rp.position < 1 || rp.position > rawResults.length) return error("Positions must be 1..N");
-    if (seenPositions.has(rp.position)) return error("Duplicate position");
-    seenPlayers.add(rp.playerId);
-    seenPositions.add(rp.position);
-    results.push({ playerId: rp.playerId, position: rp.position });
-  }
-  // Contiguous positions: the set must be exactly {1..N}.
-  if (seenPositions.size !== rawResults.length) return error("Positions must be 1..N");
-
-  const playerIds = results.map((r) => r.playerId);
-  const placeholders = playerIds.map(() => "?").join(",");
-  const found = ctx.db
-    .query(`SELECT id FROM players WHERE id IN (${placeholders})`)
-    .all(...playerIds) as { id: number }[];
-  if (found.length !== playerIds.length) return error("Unknown player in results");
-
-  const gameRes = ctx.db
-    .query("INSERT INTO games (season_id, date, notes, created_by) VALUES (?, ?, ?, ?)")
-    .run(active.id, date, notes, ctx.user.id);
-  const gameId = Number(gameRes.lastInsertRowid);
-  const insertResult = ctx.db.prepare("INSERT INTO results (game_id, player_id, position, points) VALUES (?, ?, ?, ?)");
-  for (const r of results) {
-    insertResult.run(gameId, r.playerId, r.position, pointsForPosition(ctx.points, r.position));
-  }
-  return json({ ok: true, gameId }, 201);
-}
-
-export async function handleDeleteGame(ctx: AuthedCtx, gameId: number): Promise<Response> {
-  const game = ctx.db.query("SELECT * FROM games WHERE id = ?").get(gameId) as GameRow | null;
-  if (!game) return error("Game not found", 404);
-  const isAdmin = ctx.user.is_admin === 1;
-  const isAuthor = game.created_by === ctx.user.id;
-  if (!isAdmin && !isAuthor) return error("Only the author or an admin can delete this game", 403);
-  ctx.db.query("DELETE FROM games WHERE id = ?").run(gameId);
-  return json({ ok: true });
-}
-
-// --- Seasons (admin only) ---
+// --- Games: live tournament flow (admin only) ---
 
 async function requireAdmin(ctx: Ctx, req: Request): Promise<AuthedCtx | Response> {
   const user = await loadCurrentPlayer(ctx.db, ctx.sessionSecret, req);
@@ -339,6 +327,160 @@ async function requireAdmin(ctx: Ctx, req: Request): Promise<AuthedCtx | Respons
   if (user.is_admin !== 1) return error("Admin only", 403);
   return { ...ctx, user };
 }
+
+/** POST /api/games — start tonight's game with a set of participants. */
+export async function handleStartGame(ctx: Ctx, req: Request): Promise<Response> {
+  const auth = await requireAdmin(ctx, req);
+  if (auth instanceof Response) return auth;
+
+  const body = (await req.json().catch(() => null)) as
+    | { participants?: unknown; date?: unknown; notes?: unknown }
+    | null;
+  if (!body) return error("Invalid JSON body");
+
+  const date = typeof body.date === "string" && body.date ? body.date : todayUtc();
+  if (!validateDate(date)) return error("Invalid date (expected YYYY-MM-DD)");
+  const notes = typeof body.notes === "string" ? body.notes.trim().slice(0, 500) || null : null;
+
+  const rawParticipants = Array.isArray(body.participants) ? body.participants : [];
+  const participants: number[] = [];
+  for (const p of rawParticipants) {
+    if (typeof p !== "number" || !Number.isInteger(p)) return error("participants must be player ids");
+    if (!participants.includes(p)) participants.push(p);
+  }
+  if (participants.length < 2) return error("A game needs at least 2 players");
+  if (participants.length > 50) return error("Too many players");
+
+  const placeholders = participants.map(() => "?").join(",");
+  const found = ctx.db
+    .query(`SELECT id FROM players WHERE id IN (${placeholders})`)
+    .all(...participants) as { id: number }[];
+  if (found.length !== participants.length) return error("Unknown player in participants");
+
+  const sameDay = ctx.db.query("SELECT id FROM games WHERE date = ?").get(date);
+  if (sameDay) return error("Only one game per day", 409);
+  const running = ctx.db.query("SELECT id FROM games WHERE status = 'running'").get();
+  if (running) return error("A game is already in progress", 409);
+
+  const active = ctx.db
+    .query("SELECT id FROM seasons WHERE archived_at IS NULL ORDER BY id DESC LIMIT 1")
+    .get() as { id: number } | null;
+  if (!active) return error("No active season");
+
+  const gameRes = ctx.db
+    .query("INSERT INTO games (season_id, date, notes, status, created_by) VALUES (?, ?, ?, 'running', ?)")
+    .run(active.id, date, notes, auth.user.id);
+  const gameId = Number(gameRes.lastInsertRowid);
+  const insertResult = ctx.db.prepare(
+    "INSERT INTO results (game_id, player_id, position, points) VALUES (?, ?, NULL, 0)",
+  );
+  for (const playerId of participants) insertResult.run(gameId, playerId);
+
+  return json({ ok: true, gameId }, 201);
+}
+
+/** POST /api/games/:id/eliminate — mark a player as eliminated. */
+export async function handleEliminate(ctx: Ctx, req: Request, gameId: number): Promise<Response> {
+  const auth = await requireAdmin(ctx, req);
+  if (auth instanceof Response) return auth;
+
+  const body = (await req.json().catch(() => null)) as { playerId?: unknown } | null;
+  const playerId = typeof body?.playerId === "number" ? body.playerId : null;
+  if (playerId === null) return error("playerId is required");
+
+  const game = ctx.db.query("SELECT * FROM games WHERE id = ?").get(gameId) as GameRow | null;
+  if (!game) return error("Game not found", 404);
+  if (game.status !== "running") return error("Game is not running", 400);
+
+  const rows = ctx.db
+    .query("SELECT player_id, position FROM results WHERE game_id = ?")
+    .all(gameId) as { player_id: number; position: number | null }[];
+  const inGame = rows.filter((r) => r.position === null);
+  const target = inGame.find((r) => r.player_id === playerId);
+  if (!target) return error("Player is not in this game", 400);
+  if (inGame.length <= 1) return error("Game already has a winner", 400);
+
+  // First out gets the worst position (N), then N-1, ...
+  const position = inGame.length;
+  ctx.db
+    .query("UPDATE results SET position = ? WHERE game_id = ? AND player_id = ?")
+    .run(position, gameId, playerId);
+
+  const remaining = inGame.length - 1;
+  if (remaining > 1) {
+    return json({ ok: true, finished: false, remaining });
+  }
+
+  // One player left — they win. Assign points for every position.
+  const winner = inGame.find((r) => r.player_id !== playerId)!;
+  ctx.db
+    .query("UPDATE results SET position = 1 WHERE game_id = ? AND player_id = ?")
+    .run(gameId, winner.player_id);
+  const finalRows = ctx.db
+    .query("SELECT player_id, position FROM results WHERE game_id = ?")
+    .all(gameId) as { player_id: number; position: number }[];
+  const updatePoints = ctx.db.prepare(
+    "UPDATE results SET points = ? WHERE game_id = ? AND player_id = ?",
+  );
+  for (const r of finalRows) {
+    updatePoints.run(pointsForPosition(ctx.points, r.position), gameId, r.player_id);
+  }
+  ctx.db
+    .query("UPDATE games SET status = 'finished', finished_at = datetime('now') WHERE id = ?")
+    .run(gameId);
+
+  return json({ ok: true, finished: true, winnerId: winner.player_id });
+}
+
+/** POST /api/games/:id/undo — revert the last step (elimination or the win). */
+export async function handleUndo(ctx: Ctx, req: Request, gameId: number): Promise<Response> {
+  const auth = await requireAdmin(ctx, req);
+  if (auth instanceof Response) return auth;
+
+  const game = ctx.db.query("SELECT * FROM games WHERE id = ?").get(gameId) as GameRow | null;
+  if (!game) return error("Game not found", 404);
+
+  if (game.status === "finished") {
+    // Reopen: put the winner back in the game and clear points.
+    const winner = ctx.db
+      .query("SELECT player_id FROM results WHERE game_id = ? AND position = 1")
+      .get(gameId) as { player_id: number } | null;
+    if (!winner) return error("Nothing to undo");
+    ctx.db
+      .query("UPDATE results SET position = NULL, points = 0 WHERE game_id = ? AND player_id = ?")
+      .run(gameId, winner.player_id);
+    ctx.db.query("UPDATE results SET points = 0 WHERE game_id = ?").run(gameId);
+    ctx.db
+      .query("UPDATE games SET status = 'running', finished_at = NULL WHERE id = ?")
+      .run(gameId);
+    return json({ ok: true, reopened: true });
+  }
+
+  const last = ctx.db
+    .query(
+      "SELECT player_id FROM results WHERE game_id = ? AND position IS NOT NULL ORDER BY position DESC LIMIT 1",
+    )
+    .get(gameId) as { player_id: number } | null;
+  if (!last) return error("Nothing to undo");
+
+  ctx.db
+    .query("UPDATE results SET position = NULL, points = 0 WHERE game_id = ? AND player_id = ?")
+    .run(gameId, last.player_id);
+  return json({ ok: true, restoredPlayerId: last.player_id });
+}
+
+/** DELETE /api/games/:id — admin only. */
+export async function handleDeleteGame(ctx: Ctx, req: Request, gameId: number): Promise<Response> {
+  const auth = await requireAdmin(ctx, req);
+  if (auth instanceof Response) return auth;
+
+  const game = ctx.db.query("SELECT id FROM games WHERE id = ?").get(gameId);
+  if (!game) return error("Game not found", 404);
+  ctx.db.query("DELETE FROM games WHERE id = ?").run(gameId);
+  return json({ ok: true });
+}
+
+// --- Seasons (admin only) ---
 
 export async function handleCreateSeason(ctx: Ctx, req: Request): Promise<Response> {
   const auth = await requireAdmin(ctx, req);
@@ -348,14 +490,22 @@ export async function handleCreateSeason(ctx: Ctx, req: Request): Promise<Respon
   const prize = typeof body?.prize === "string" ? body.prize.trim().slice(0, 200) || null : null;
   const active = ctx.db.query("SELECT id FROM seasons WHERE archived_at IS NULL LIMIT 1").get();
   if (active) return error("Archive the current season first");
-  const res = ctx.db.query("INSERT INTO seasons (name, prize) VALUES (?, ?)").run(name ?? "Season " + (ctx.db.query("SELECT COUNT(*) AS n FROM seasons").get() as { n: number }).n, prize);
+  const res = ctx.db
+    .query("INSERT INTO seasons (name, prize) VALUES (?, ?)")
+    .run(
+      name ?? "Season " + (ctx.db.query("SELECT COUNT(*) AS n FROM seasons").get() as { n: number }).n,
+      prize,
+    );
   return json({ ok: true, seasonId: Number(res.lastInsertRowid) }, 201);
 }
 
 export async function handleArchiveSeason(ctx: Ctx, req: Request, seasonId: number): Promise<Response> {
   const auth = await requireAdmin(ctx, req);
   if (auth instanceof Response) return auth;
-  const season = ctx.db.query("SELECT * FROM seasons WHERE id = ?").get(seasonId) as { id: number; archived_at: string | null; name: string } | null;
+  const season = ctx.db.query("SELECT * FROM seasons WHERE id = ?").get(seasonId) as {
+    id: number;
+    archived_at: string | null;
+  } | null;
   if (!season) return error("Season not found", 404);
   if (season.archived_at !== null) return error("Season already archived");
   ctx.db.query("UPDATE seasons SET archived_at = datetime('now') WHERE id = ?").run(seasonId);
@@ -372,7 +522,9 @@ export async function handleRenamePlayer(ctx: Ctx, req: Request, playerId: numbe
   const body = (await req.json().catch(() => null)) as { name?: unknown } | null;
   const name = typeof body?.name === "string" ? body.name.trim() : "";
   if (!/^[^\x00-\x1f\x7f]{1,30}$/.test(name)) return error("Name must be 1-30 characters");
-  const taken = ctx.db.query("SELECT id FROM players WHERE name = ? COLLATE NOCASE AND id != ?").get(name, playerId);
+  const taken = ctx.db
+    .query("SELECT id FROM players WHERE name = ? COLLATE NOCASE AND id != ?")
+    .get(name, playerId);
   if (taken) return error("That name is already taken");
   const res = ctx.db.query("UPDATE players SET name = ? WHERE id = ?").run(name, playerId);
   if (res.changes === 0) return error("Player not found", 404);

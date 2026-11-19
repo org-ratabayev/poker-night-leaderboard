@@ -5,14 +5,13 @@
 import type { Database } from "bun:sqlite";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { loadCurrentPlayer } from "./auth";
 import { openDb } from "./db";
 import {
   error,
   handleArchiveSeason,
-  handleCreateGame,
   handleCreateSeason,
   handleDeleteGame,
+  handleEliminate,
   handleHealth,
   handleLogin,
   handleLogout,
@@ -21,8 +20,9 @@ import {
   handleRenamePlayer,
   handleSeason,
   handleSetAdmin,
+  handleStartGame,
   handleState,
-  type AuthedCtx,
+  handleUndo,
   type Ctx,
 } from "./routes";
 
@@ -76,12 +76,6 @@ export function createApp(db: Database, config: AppConfig): (req: Request) => Pr
   const ctx: Ctx = { db, points: config.points, inviteCode: config.inviteCode, sessionSecret: config.sessionSecret };
   const staticFiles = loadStatic();
 
-  async function authed(req: Request): Promise<AuthedCtx | Response> {
-    const user = await loadCurrentPlayer(ctx.db, ctx.sessionSecret, req);
-    if (!user) return error("Not logged in", 401);
-    return { ...ctx, user };
-  }
-
   function serveStatic(name: string): Response {
     const file = staticFiles.get(name);
     if (!file) return error("Not found", 404);
@@ -105,20 +99,22 @@ export function createApp(db: Database, config: AppConfig): (req: Request) => Pr
     {
       pattern: /^\/api\/games$/,
       method: "POST",
-      handler: async (req) => {
-        const a = await authed(req);
-        if (a instanceof Response) return a;
-        return handleCreateGame(a, req);
-      },
+      handler: (req) => handleStartGame(ctx, req),
+    },
+    {
+      pattern: /^\/api\/games\/(\d+)\/eliminate$/,
+      method: "POST",
+      handler: (req, _url, m) => handleEliminate(ctx, req, Number(m[1])),
+    },
+    {
+      pattern: /^\/api\/games\/(\d+)\/undo$/,
+      method: "POST",
+      handler: (req, _url, m) => handleUndo(ctx, req, Number(m[1])),
     },
     {
       pattern: /^\/api\/games\/(\d+)$/,
       method: "DELETE",
-      handler: async (req, _url, m) => {
-        const a = await authed(req);
-        if (a instanceof Response) return a;
-        return handleDeleteGame(a, Number(m[1]));
-      },
+      handler: (req, _url, m) => handleDeleteGame(ctx, req, Number(m[1])),
     },
     { pattern: /^\/api\/seasons$/, method: "POST", handler: (req) => handleCreateSeason(ctx, req) },
     { pattern: /^\/api\/seasons\/(\d+)\/archive$/, method: "POST", handler: (req, _url, m) => handleArchiveSeason(ctx, req, Number(m[1])) },

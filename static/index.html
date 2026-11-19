@@ -64,22 +64,31 @@
       </section>
 
       <section id="view-games" class="view">
-        <div class="panel">
-          <h2>Add tonight's results</h2>
-          <p class="muted">Enter players in finishing order — first row = 1st place.</p>
-          <form id="game-form">
-            <div class="form-row">
-              <label>Date <input id="game-date" type="date" required></label>
-              <label>Notes (optional) <input id="game-notes" type="text" maxlength="200" placeholder="e.g. €10 buy-in, 9 players"></label>
-            </div>
-            <div id="game-rows"></div>
-            <div class="form-row">
-              <button type="button" id="add-row" class="ghost">+ Add player</button>
-            </div>
-            <button type="submit" class="primary">Save game</button>
-            <div class="form-error" id="game-error"></div>
-          </form>
+        <!-- Live game: everyone watches, the admin marks eliminations -->
+        <div class="panel hidden" id="live-panel">
+          <h2>🔴 Game in progress <span id="live-date" class="muted"></span></h2>
+          <p class="muted" id="live-hint"></p>
+          <div id="live-remaining"></div>
+          <div id="live-eliminated"></div>
+          <div class="form-row" id="live-actions"></div>
+          <div class="form-error" id="live-error"></div>
         </div>
+
+        <!-- Start form: admin only, once per day -->
+        <div class="panel hidden" id="start-panel">
+          <h2>Start tonight's game</h2>
+          <p class="muted">Pick the players at the table. One game per day; you mark players as they bust out.</p>
+          <div id="participants"></div>
+          <label>Note (optional) <input id="game-notes" type="text" maxlength="200" placeholder="e.g. €10 buy-in"></label>
+          <button id="start-game-btn" class="primary">Start game</button>
+          <div class="form-error" id="start-error"></div>
+        </div>
+
+        <!-- Observers / already-played-today notice -->
+        <div class="panel hidden" id="no-game-panel">
+          <p class="muted" id="no-game-text"></p>
+        </div>
+
         <div class="panel">
           <h2>Game history</h2>
           <div id="game-history"></div>

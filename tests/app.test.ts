@@ -22,7 +22,6 @@ const CONFIG = {
 
 async function req(method: string, path: string, body?: unknown, cookie?: string): Promise<Response> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (body !== undefined) headers["Content-Type"] = "application/json";
   if (cookie) headers["Cookie"] = cookie;
   return fetchHandler(new Request(`http://test.local${path}`, {
     method,
@@ -131,78 +130,193 @@ describe("auth", () => {
 
   test("state exposes active season and players", async () => {
     const res = await req("GET", "/api/state", undefined, adminCookie);
-    const body = (await res.json()) as { activeSeason: { name: string }; players: unknown[]; seasons: unknown[] };
+    const body = (await res.json()) as {
+      activeSeason: { name: string; runningGame: unknown };
+      players: unknown[];
+      seasons: unknown[];
+      todayHasGame: boolean;
+    };
     expect(body.activeSeason.name).toBe("Season 1");
     expect(body.players.length).toBe(2);
     expect(body.seasons.length).toBe(1);
+    expect(body.activeSeason.runningGame).toBeNull();
+    expect(body.todayHasGame).toBe(false);
   });
 });
 
-// --- Games ---
+// --- Games: live tournament flow (admin only, one game per day) ---
 
-describe("games", () => {
-  test("unauthenticated game rejected", async () => {
-    const res = await req("POST", "/api/games", { date: "2026-08-07", results: [] });
-    expect(res.status).toBe(401);
-  });
-
-  test("invalid positions rejected", async () => {
-    const res = await req("POST", "/api/games", { date: "2026-08-07", results: [{ playerId: 1, position: 2 }, { playerId: 2, position: 5 }] }, playerCookie);
-    expect(res.status).toBe(400);
-  });
-
-  test("unknown player rejected", async () => {
-    const res = await req("POST", "/api/games", { date: "2026-08-07", results: [{ playerId: 1, position: 1 }, { playerId: 999, position: 2 }] }, playerCookie);
-    expect(res.status).toBe(400);
-  });
-
-  test("any logged-in player can add a game", async () => {
-    const res = await req("POST", "/api/games", {
-      date: "2026-08-07",
-      notes: "Friday night",
-      results: [{ playerId: 1, position: 1 }, { playerId: 2, position: 2 }],
-    }, playerCookie); // created_by = Alex (id 2)
-    expect(res.status).toBe(201);
-  });
-
-  test("admin can also add a game", async () => {
-    const res = await req("POST", "/api/games", {
-      date: "2026-08-14",
-      results: [{ playerId: 1, position: 1 }, { playerId: 2, position: 2 }],
-    }, adminCookie); // created_by = Ruslan (id 1)
-    expect(res.status).toBe(201);
-  });
-
-  test("standings computed correctly", async () => {
-    const res = await req("GET", "/api/state", undefined, adminCookie);
-    const body = (await res.json()) as {
-      activeSeason: { standings: { player: { name: string }; points: number; games: number }[]; games: unknown[] };
-    };
-    expect(body.activeSeason.standings[0].player.name).toBe("Ruslan");
-    expect(body.activeSeason.standings[0].points).toBe(200);
-    expect(body.activeSeason.standings[0].games).toBe(2);
-    expect(body.activeSeason.standings[1].player.name).toBe("Alex");
-    expect(body.activeSeason.standings[1].points).toBe(150);
-    expect(body.activeSeason.games.length).toBe(2);
-  });
-
-  test("non-author non-admin cannot delete", async () => {
-    const res = await req("DELETE", "/api/games/2", undefined, playerCookie); // game 2 belongs to Ruslan
+describe("games: live tournament", () => {
+  test("non-admin cannot start a game", async () => {
+    const res = await req("POST", "/api/games", { participants: [1, 2] }, playerCookie);
     expect(res.status).toBe(403);
   });
 
-  test("author can delete own game", async () => {
-    const res = await req("DELETE", "/api/games/1", undefined, playerCookie); // game 1 belongs to Alex
-    expect(res.status).toBe(200);
-    const state = await (await req("GET", "/api/state", undefined, adminCookie)).json() as { activeSeason: { standings: { points: number }[] } };
-    expect(state.activeSeason.standings[0].points).toBe(100); // only Ruslan's game (2026-08-14) remains
+  test("unauthenticated cannot start a game", async () => {
+    const res = await req("POST", "/api/games", { participants: [1, 2] });
+    expect(res.status).toBe(401);
   });
 
-  test("admin can delete any game", async () => {
-    const res = await req("DELETE", "/api/games/2", undefined, adminCookie);
+  test("needs at least 2 participants", async () => {
+    const res = await req("POST", "/api/games", { participants: [1] }, adminCookie);
+    expect(res.status).toBe(400);
+  });
+
+  test("admin starts tonight's game", async () => {
+    const res = await req("POST", "/api/games", { participants: [1, 2], notes: "€10 buy-in" }, adminCookie);
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { gameId: number };
+    expect(body.gameId).toBeGreaterThan(0);
+  });
+
+  test("only one game per day", async () => {
+    const res = await req("POST", "/api/games", { participants: [1, 2] }, adminCookie);
+    expect(res.status).toBe(409);
+  });
+
+  test("running game is visible to everyone", async () => {
+    const res = await req("GET", "/api/state", undefined, playerCookie);
+    const body = (await res.json()) as {
+      activeSeason: { runningGame: { remaining: { name: string }[]; eliminated: unknown[]; totalPlayers: number } };
+      todayHasGame: boolean;
+    };
+    expect(body.activeSeason.runningGame.remaining.length).toBe(2);
+    expect(body.activeSeason.runningGame.eliminated.length).toBe(0);
+    expect(body.activeSeason.runningGame.totalPlayers).toBe(2);
+    expect(body.todayHasGame).toBe(true);
+  });
+
+  test("non-admin cannot eliminate", async () => {
+    const res = await req("POST", "/api/games/1/eliminate", { playerId: 2 }, playerCookie);
+    expect(res.status).toBe(403);
+  });
+
+  test("eliminating a player assigns the worst position and finishes the game", async () => {
+    // 2 players: eliminating one leaves a single player → they win.
+    const res = await req("POST", "/api/games/1/eliminate", { playerId: 2 }, adminCookie);
     expect(res.status).toBe(200);
-    const state = await (await req("GET", "/api/state", undefined, adminCookie)).json() as { activeSeason: { standings: unknown[] } };
-    expect(state.activeSeason.standings).toHaveLength(0);
+    const body = (await res.json()) as { finished: boolean; winnerId: number };
+    expect(body.finished).toBe(true);
+    expect(body.winnerId).toBe(1);
+  });
+
+  test("finished game has positions and points", async () => {
+    const res = await req("GET", "/api/state", undefined, adminCookie);
+    const body = (await res.json()) as {
+      activeSeason: {
+        runningGame: unknown;
+        games: { results: { name: string; position: number; points: number }[] }[];
+        standings: { player: { name: string }; points: number }[];
+      };
+    };
+    expect(body.activeSeason.runningGame).toBeNull();
+    expect(body.activeSeason.games.length).toBe(1);
+    const results = body.activeSeason.games[0].results;
+    expect(results.length).toBe(2);
+    expect(results[0].name).toBe("Ruslan");
+    expect(results[0].position).toBe(1);
+    expect(results[0].points).toBe(100);
+    expect(results[1].name).toBe("Alex");
+    expect(results[1].position).toBe(2);
+    expect(results[1].points).toBe(75);
+    // standings
+    expect(body.activeSeason.standings[0].player.name).toBe("Ruslan");
+    expect(body.activeSeason.standings[0].points).toBe(100);
+  });
+
+  test("eliminating from a finished game is rejected", async () => {
+    const res = await req("POST", "/api/games/1/eliminate", { playerId: 1 }, adminCookie);
+    expect(res.status).toBe(400);
+  });
+
+  test("undo reopens a finished game", async () => {
+    const res = await req("POST", "/api/games/1/undo", {}, adminCookie);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { reopened: boolean };
+    expect(body.reopened).toBe(true);
+    const state = await (await req("GET", "/api/state", undefined, adminCookie)).json() as {
+      activeSeason: { runningGame: { remaining: unknown[] } | null; standings: unknown[]; games: unknown[] };
+    };
+    expect(state.activeSeason.runningGame).not.toBeNull();
+    expect(state.activeSeason.runningGame!.remaining.length).toBe(1);
+    expect(state.activeSeason.games.length).toBe(0); // nothing finished → excluded from history
+    expect(state.activeSeason.standings.length).toBe(0); // running games don't count
+  });
+
+  test("undo restores the last eliminated player", async () => {
+    const res = await req("POST", "/api/games/1/undo", {}, adminCookie);
+    expect(res.status).toBe(200);
+    const state = await (await req("GET", "/api/state", undefined, adminCookie)).json() as {
+      activeSeason: { runningGame: { remaining: unknown[] } };
+    };
+    expect(state.activeSeason.runningGame.remaining.length).toBe(2);
+  });
+
+  test("nothing to undo when no eliminations", async () => {
+    const res = await req("POST", "/api/games/1/undo", {}, adminCookie);
+    expect(res.status).toBe(400);
+  });
+
+  test("three-player game: positions 3, 2, then winner", async () => {
+    // Finish the current game first, then start a 3-player game on another date.
+    await req("POST", "/api/games/1/eliminate", { playerId: 2 }, adminCookie);
+    await req("DELETE", "/api/games/1", undefined, adminCookie);
+
+    const third = await req("POST", "/api/auth/register", { name: "Vini", password: "password123", invite: "secret-invite" });
+    expect(third.status).toBe(201);
+
+    const start = await req("POST", "/api/games", { participants: [1, 2, 3], date: "2026-08-08" }, adminCookie);
+    expect(start.status).toBe(201);
+    const { gameId } = (await start.json()) as { gameId: number };
+
+    const first = await req("POST", `/api/games/${gameId}/eliminate`, { playerId: 3 }, adminCookie);
+    const firstBody = (await first.json()) as { finished: boolean; remaining: number };
+    expect(firstBody.finished).toBe(false);
+    expect(firstBody.remaining).toBe(2);
+
+    const second = await req("POST", `/api/games/${gameId}/eliminate`, { playerId: 2 }, adminCookie);
+    const secondBody = (await second.json()) as { finished: boolean; winnerId: number };
+    expect(secondBody.finished).toBe(true);
+    expect(secondBody.winnerId).toBe(1);
+
+    const state = await (await req("GET", "/api/state", undefined, adminCookie)).json() as {
+      activeSeason: {
+        games: { results: { name: string; position: number; points: number }[] }[];
+      };
+    };
+    const results = state.activeSeason.games[0].results;
+    const byName = Object.fromEntries(results.map((r) => [r.name, r]));
+    expect(byName["Vini"].position).toBe(3);
+    expect(byName["Vini"].points).toBe(55);
+    expect(byName["Alex"].position).toBe(2);
+    expect(byName["Alex"].points).toBe(75);
+    expect(byName["Ruslan"].position).toBe(1);
+    expect(byName["Ruslan"].points).toBe(100);
+  });
+
+  test("non-admin cannot delete a game", async () => {
+    const state = await (await req("GET", "/api/state", undefined, adminCookie)).json() as {
+      activeSeason: { games: { id: number }[] };
+    };
+    const gameId = state.activeSeason.games[0].id;
+    const res = await req("DELETE", `/api/games/${gameId}`, undefined, playerCookie);
+    expect(res.status).toBe(403);
+  });
+
+  test("admin deletes a game and the day is free again", async () => {
+    const state = await (await req("GET", "/api/state", undefined, adminCookie)).json() as {
+      activeSeason: { games: { id: number }[] };
+    };
+    const gameId = state.activeSeason.games[0].id;
+    const del = await req("DELETE", `/api/games/${gameId}`, undefined, adminCookie);
+    expect(del.status).toBe(200);
+    const after = await (await req("GET", "/api/state", undefined, adminCookie)).json() as {
+      activeSeason: { games: unknown[]; standings: unknown[] };
+      todayHasGame: boolean;
+    };
+    expect(after.activeSeason.games.length).toBe(0);
+    expect(after.activeSeason.standings.length).toBe(0);
+    expect(after.todayHasGame).toBe(false);
   });
 });
 
@@ -233,7 +347,6 @@ describe("seasons", () => {
   test("champion recorded for archived season", async () => {
     const res = await req("GET", "/api/season/1", undefined, adminCookie);
     const body = (await res.json()) as { champion: { name: string } | null };
-    // Games were deleted in earlier tests, so champion may be null — just check shape.
     expect(body).toHaveProperty("champion");
   });
 

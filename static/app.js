@@ -4,6 +4,8 @@
 const $ = (sel) => document.querySelector(sel);
 
 let state = null;
+let selectedParticipants = new Set();
+let participantsInitialized = false;
 
 // --- Helpers ---
 
@@ -11,6 +13,12 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]));
+}
+
+function ordinal(n) {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
 async function api(path, options = {}) {
@@ -28,8 +36,19 @@ async function api(path, options = {}) {
   return body;
 }
 
-function today() {
-  return new Date().toISOString().slice(0, 10);
+async function reload() {
+  state = await api("/api/state");
+  participantsInitialized = false;
+  selectedParticipants = new Set();
+  render();
+}
+
+function isAdmin() {
+  return !!(state && state.me && state.me.isAdmin);
+}
+
+function liveGame() {
+  return state && state.activeSeason ? state.activeSeason.runningGame : null;
 }
 
 // --- Views ---
@@ -51,10 +70,7 @@ function switchTab(name) {
 
 function renderUserbox() {
   const box = $("#userbox");
-  if (!state.me) {
-    box.innerHTML = "";
-    return;
-  }
+  if (!state.me) { box.innerHTML = ""; return; }
   const admin = state.me.isAdmin ? " <span class='admin-badge'>admin</span>" : "";
   box.innerHTML =
     `<span>👤 ${esc(state.me.name)}${admin}</span>` +
@@ -68,7 +84,9 @@ function renderUserbox() {
 
 function renderSeasonLabel() {
   const s = state.activeSeason;
-  $("#season-label").textContent = s ? `${s.name} — ${s.games.length} game(s), ${s.standings.length} players` : "No active season";
+  $("#season-label").textContent = s
+    ? `${s.name} — ${s.games.length} game(s), ${s.standings.length} players`
+    : "No active season";
 }
 
 function renderStandings() {
@@ -76,11 +94,13 @@ function renderStandings() {
   const body = $("#standings-body");
   const empty = $("#standings-empty");
   const banner = $("#champion-banner");
+  const live = liveGame();
 
   if (!s || s.standings.length === 0) {
     body.innerHTML = "";
     empty.classList.remove("hidden");
-    banner.innerHTML = "";
+    banner.innerHTML = live ? liveBanner(live) : "";
+    if (live) bindLiveBanner();
     return;
   }
   empty.classList.add("hidden");
@@ -99,80 +119,166 @@ function renderStandings() {
 
   const champion = s.standings[0];
   const prize = s.prize ? ` · ${esc(s.prize)}` : "";
-  banner.innerHTML = `
-    <div class="champion-banner">
+  banner.innerHTML =
+    (live ? liveBanner(live) : "") +
+    `<div class="champion-banner">
       <div class="trophy">🏆</div>
       <div>
         <div class="title">${esc(champion.player.name)} leads the season</div>
         <div class="prize">${champion.points} pts in ${champion.games} game(s)${prize}</div>
       </div>
     </div>`;
+  if (live) bindLiveBanner();
 }
 
-// --- Games ---
+function liveBanner(live) {
+  return `<div class="live-banner" id="live-banner">
+    <span class="live-dot">🔴</span>
+    <span><b>Live game in progress</b> — ${live.remaining.length} of ${live.totalPlayers} players left</span>
+    <button class="ghost small" id="go-live">watch</button>
+  </div>`;
+}
 
-function gameRowsHtml() {
-  const rows = $("#game-rows");
-  const players = (state && state.players) || [];
-  if (players.length === 0) return; // no registered players yet — nothing to add a row for
-  const n = rows.querySelectorAll(".game-row").length;
-  const options = players
-    .map((p) => `<option value="${p.id}">${esc(p.name)}</option>`)
+function bindLiveBanner() {
+  const btn = $("#go-live");
+  if (btn) btn.addEventListener("click", () => switchTab("games"));
+}
+
+// --- Games: live tournament ---
+
+function renderGames() {
+  const live = liveGame();
+  const admin = isAdmin();
+  const todayHasGame = !!state.todayHasGame;
+
+  $("#live-panel").classList.toggle("hidden", !live);
+  $("#start-panel").classList.toggle("hidden", !(admin && !live && !todayHasGame));
+  $("#no-game-panel").classList.toggle("hidden", !!live || (admin && !todayHasGame));
+
+  if (live) renderLive(live, admin);
+  if (admin && !live && !todayHasGame) renderStartForm();
+  if (!live) {
+    $("#no-game-text").textContent = todayHasGame
+      ? "Today's game is already recorded. See the history below."
+      : "No game in progress. The admin starts the game at the table.";
+  }
+  renderHistory();
+}
+
+function renderLive(live, admin) {
+  $("#live-date").textContent = `· ${live.date}`;
+  $("#live-hint").textContent = admin
+    ? "Tap “Eliminated” when a player busts out. The last one standing wins."
+    : "Watch live — the admin marks players as they bust out.";
+
+  $("#live-remaining").innerHTML =
+    `<h3>Still in (${live.remaining.length})</h3>` +
+    live.remaining
+      .map(
+        (p) => `<div class="player-item">
+          <span>🃏 ${esc(p.name)}</span>
+          ${admin ? `<button class="danger small elim-btn" data-id="${p.id}" data-name="${esc(p.name)}">Eliminated</button>` : ""}
+        </div>`,
+      )
+      .join("");
+
+  $("#live-eliminated").innerHTML = live.eliminated.length
+    ? `<h3>Out</h3>` +
+      live.eliminated
+        .map(
+          (e) => `<div class="player-item muted-line">
+            <span>${esc(e.name)}</span>
+            <span class="muted">${ordinal(e.position)} place</span>
+          </div>`,
+        )
+        .join("")
+    : "";
+
+  $("#live-actions").innerHTML = admin
+    ? `<button class="ghost" id="undo-btn">Undo last step</button>`
+    : "";
+
+  if (admin) {
+    $("#live-remaining").querySelectorAll(".elim-btn").forEach((btn) =>
+      btn.addEventListener("click", async () => {
+        if (!confirm(`Mark ${btn.dataset.name} as eliminated?`)) return;
+        try {
+          await api(`/api/games/${live.id}/eliminate`, {
+            method: "POST",
+            body: JSON.stringify({ playerId: Number(btn.dataset.id) }),
+          });
+          await reload();
+        } catch (err) { $("#live-error").textContent = err.message; }
+      }),
+    );
+    const undo = $("#undo-btn");
+    if (undo) undo.addEventListener("click", async () => {
+      if (!confirm("Undo the last step?")) return;
+      try {
+        await api(`/api/games/${live.id}/undo`, { method: "POST" });
+        await reload();
+      } catch (err) { $("#live-error").textContent = err.message; }
+    });
+  }
+}
+
+function renderStartForm() {
+  const players = state.players || [];
+  if (!participantsInitialized) {
+    selectedParticipants = new Set(players.map((p) => p.id));
+    participantsInitialized = true;
+  }
+  if (players.length < 2) {
+    $("#participants").innerHTML = `<p class="muted">At least 2 registered players are needed.</p>`;
+    $("#start-game-btn").disabled = true;
+    return;
+  }
+  $("#start-game-btn").disabled = false;
+  $("#participants").innerHTML = players
+    .map(
+      (p) => `<label class="check-row">
+        <input type="checkbox" class="part-check" value="${p.id}" ${selectedParticipants.has(p.id) ? "checked" : ""}>
+        <span>${esc(p.name)}</span>
+      </label>`,
+    )
     .join("");
-  const div = document.createElement("div");
-  div.className = "game-row";
-  div.innerHTML = `
-    <span class="pos-badge">${n + 1}</span>
-    <select class="game-player">${options}</select>
-    <button type="button" class="danger small game-remove" ${n === 0 ? "disabled" : ""}>✕</button>`;
-  rows.appendChild(div);
-  div.querySelector(".game-remove").addEventListener("click", () => {
-    div.remove();
-    renumberRows();
-  });
+  $("#participants").querySelectorAll(".part-check").forEach((cb) =>
+    cb.addEventListener("change", () => {
+      const id = Number(cb.value);
+      if (cb.checked) selectedParticipants.add(id);
+      else selectedParticipants.delete(id);
+    }),
+  );
 }
 
-function renumberRows() {
-  document.querySelectorAll("#game-rows .pos-badge").forEach((b, i) => {
-    b.textContent = i + 1;
-    const btn = b.closest(".game-row").querySelector(".game-remove");
-    btn.disabled = i === 0;
-  });
-}
-
-function renderGameHistory() {
+function renderHistory() {
   const s = state.activeSeason;
   const host = $("#game-history");
   if (!s || s.games.length === 0) {
-    host.innerHTML = `<p class="muted">No games yet this season.</p>`;
+    host.innerHTML = `<p class="muted">No completed games yet this season.</p>`;
     return;
   }
   host.innerHTML = s.games
-    .map((g) => `
-      <div class="game-card">
+    .map(
+      (g) => `<div class="game-card">
         <div class="ghead">
-          <span class="gdate">${esc(g.date)}${g.createdBy ? ` · by ${esc(g.createdBy)}` : ""}</span>
-          ${canDeleteGame(g) ? `<button class="danger small game-del" data-id="${g.id}">Delete</button>` : ""}
+          <span class="gdate">${esc(g.date)}${g.createdBy ? ` · started by ${esc(g.createdBy)}` : ""}</span>
+          ${isAdmin() ? `<button class="danger small game-del" data-id="${g.id}">Delete</button>` : ""}
         </div>
         <div class="gresults">
           ${g.results.map((r) => `<div><b>${r.position}.</b> ${esc(r.name)} <span class="pts">+${r.points}</span></div>`).join("")}
         </div>
         ${g.notes ? `<div class="gnotes">${esc(g.notes)}</div>` : ""}
-      </div>`)
+      </div>`,
+    )
     .join("");
   host.querySelectorAll(".game-del").forEach((btn) =>
     btn.addEventListener("click", async () => {
       if (!confirm("Delete this game and its points?")) return;
       await api(`/api/games/${btn.dataset.id}`, { method: "DELETE" });
-      state = await api("/api/state");
-      render();
+      await reload();
     }),
   );
-}
-
-function canDeleteGame(g) {
-  if (!state.me) return false;
-  return state.me.isAdmin || g.createdBy === state.me.name;
 }
 
 // --- Seasons ---
@@ -180,24 +286,24 @@ function canDeleteGame(g) {
 function renderSeasons() {
   const list = $("#season-list");
   list.innerHTML = state.seasons
-    .map((s) => `
-      <div class="season-item">
+    .map(
+      (s) => `<div class="season-item">
         <div>
           <div class="sname">${esc(s.name)}${s.archived ? "" : " <span class='admin-badge'>active</span>"}</div>
           <div class="smeta">${s.champion ? `🏆 Champion: ${esc(s.champion.name)}` : "No champion yet"}${s.prize ? ` · ${esc(s.prize)}` : ""}</div>
         </div>
-        ${state.me && state.me.isAdmin && !s.archived ? `<button class="ghost small season-archive" data-id="${s.id}">Archive</button>` : ""}
-      </div>`)
+        ${isAdmin() && !s.archived ? `<button class="ghost small season-archive" data-id="${s.id}">Archive</button>` : ""}
+      </div>`,
+    )
     .join("");
   list.querySelectorAll(".season-archive").forEach((btn) =>
     btn.addEventListener("click", async () => {
       if (!confirm("Archive this season? A new season will start automatically.")) return;
       await api(`/api/seasons/${btn.dataset.id}/archive`, { method: "POST" });
-      state = await api("/api/state");
-      render();
+      await reload();
     }),
   );
-  $("#season-form").classList.toggle("hidden", !(state.me && state.me.isAdmin));
+  $("#season-form").classList.toggle("hidden", !isAdmin());
 }
 
 // --- Players ---
@@ -205,32 +311,33 @@ function renderSeasons() {
 function renderPlayers() {
   const list = $("#player-list");
   if (!state.me) { list.innerHTML = ""; return; }
-  const isAdmin = state.me.isAdmin;
+  const admin = isAdmin();
   list.innerHTML = state.players
-    .map((p) => `
-      <div class="player-item">
+    .map(
+      (p) => `<div class="player-item">
         <span>${esc(p.name)}${p.isAdmin ? " <span class='admin-badge'>admin</span>" : ""}</span>
-        ${isAdmin ? `
-          <span>
+        ${admin ? `<span>
             <input type="text" class="rename-input" data-id="${p.id}" value="${esc(p.name)}" maxlength="30" style="width:140px;margin-top:0">
             <button class="ghost small rename-btn" data-id="${p.id}">Rename</button>
             ${p.id !== state.me.id ? `<button class="ghost small admin-toggle" data-id="${p.id}" data-admin="${p.isAdmin ? 1 : 0}">${p.isAdmin ? "Revoke admin" : "Make admin"}</button>` : ""}
           </span>` : ""}
-      </div>`)
+      </div>`,
+    )
     .join("");
   list.querySelectorAll(".rename-btn").forEach((btn) =>
     btn.addEventListener("click", async () => {
       const input = list.querySelector(`.rename-input[data-id="${btn.dataset.id}"]`);
       await api(`/api/players/${btn.dataset.id}/rename`, { method: "POST", body: JSON.stringify({ name: input.value }) });
-      state = await api("/api/state");
-      render();
+      await reload();
     }),
   );
   list.querySelectorAll(".admin-toggle").forEach((btn) =>
     btn.addEventListener("click", async () => {
-      await api(`/api/players/${btn.dataset.id}/admin`, { method: "POST", body: JSON.stringify({ isAdmin: btn.dataset.admin === "0" }) });
-      state = await api("/api/state");
-      render();
+      await api(`/api/players/${btn.dataset.id}/admin`, {
+        method: "POST",
+        body: JSON.stringify({ isAdmin: btn.dataset.admin === "0" }),
+      });
+      await reload();
     }),
   );
 }
@@ -243,7 +350,7 @@ function render() {
   if (!state.me) { showAuth(); return; }
   showApp();
   renderStandings();
-  renderGameHistory();
+  renderGames();
   renderSeasons();
   renderPlayers();
 }
@@ -251,7 +358,6 @@ function render() {
 // --- Events ---
 
 function bindEvents() {
-  // auth tabs
   $("#tab-login").addEventListener("click", () => {
     $("#tab-login").classList.add("active");
     $("#tab-register").classList.remove("active");
@@ -272,8 +378,7 @@ function bindEvents() {
         method: "POST",
         body: JSON.stringify({ name: $("#login-name").value, password: $("#login-password").value }),
       });
-      state = await api("/api/state");
-      render();
+      await reload();
     } catch (err) { $("#login-error").textContent = err.message; }
   });
 
@@ -284,40 +389,26 @@ function bindEvents() {
         method: "POST",
         body: JSON.stringify({ name: $("#reg-name").value, password: $("#reg-password").value, invite: $("#reg-invite").value }),
       });
-      state = await api("/api/state");
-      render();
+      await reload();
     } catch (err) { $("#register-error").textContent = err.message; }
   });
 
-  // app tabs
   document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
 
-  // game form
-  $("#game-date").value = today();
-  $("#add-row").addEventListener("click", gameRowsHtml);
-  gameRowsHtml(); // start with one row
-
-  $("#game-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const rows = [...document.querySelectorAll("#game-rows .game-row")];
-    const results = rows
-      .map((row, i) => ({ playerId: Number(row.querySelector(".game-player").value), position: i + 1 }))
-      .filter((r) => Number.isFinite(r.playerId));
+  $("#start-game-btn").addEventListener("click", async () => {
     try {
       await api("/api/games", {
         method: "POST",
-        body: JSON.stringify({ date: $("#game-date").value, notes: $("#game-notes").value, results }),
+        body: JSON.stringify({
+          participants: [...selectedParticipants],
+          notes: $("#game-notes").value,
+        }),
       });
       $("#game-notes").value = "";
-      $("#game-date").value = today();
-      state = await api("/api/state");
-      render();
-      renderGameHistory();
-      switchTab("standings");
-    } catch (err) { $("#game-error").textContent = err.message; }
+      await reload();
+    } catch (err) { $("#start-error").textContent = err.message; }
   });
 
-  // season form
   $("#season-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     try {
@@ -327,18 +418,32 @@ function bindEvents() {
       });
       $("#season-name").value = "";
       $("#season-prize").value = "";
-      state = await api("/api/state");
-      render();
+      await reload();
     } catch (err) { $("#season-error").textContent = err.message; }
   });
+}
+
+// --- Live updates for observers (and the admin's other devices) ---
+
+async function refreshState() {
+  if (document.hidden) return;
+  try {
+    const fresh = await api("/api/state");
+    const wasLive = !!liveGame();
+    const nowLive = !!(fresh.activeSeason && fresh.activeSeason.runningGame);
+    state = fresh;
+    if (wasLive || nowLive) render();
+    else { renderStandings(); renderSeasonLabel(); }
+  } catch { /* transient network hiccup — retry on next tick */ }
 }
 
 // --- Boot ---
 
 (async function boot() {
-  state = await api("/api/state"); // must be set BEFORE bindEvents (gameRowsHtml reads state.players)
+  state = await api("/api/state"); // must be set BEFORE bindEvents (render reads state)
   bindEvents();
   render();
+  setInterval(refreshState, 10000);
 })().catch((err) => {
   console.error(err);
   document.body.innerHTML = `<main><div class="panel"><h2>Failed to load</h2><p>${esc(err.message)}</p></div></main>`;
