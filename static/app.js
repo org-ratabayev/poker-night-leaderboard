@@ -7,6 +7,51 @@ let state = null;
 let selectedParticipants = new Set();
 let participantsInitialized = false;
 
+// --- Theme (site default from the server, per-browser override) ---
+
+const THEME_KEY = "poker-theme";
+let snowLayer = null;
+
+function activeTheme() {
+  const personal = localStorage.getItem(THEME_KEY);
+  if (personal === "christmas" || personal === "default") return personal;
+  return (state && state.siteTheme) || "default";
+}
+
+function renderSnow(on) {
+  if (!on) {
+    if (snowLayer) { snowLayer.remove(); snowLayer = null; }
+    return;
+  }
+  if (snowLayer) return;
+  snowLayer = document.createElement("div");
+  snowLayer.className = "snow";
+  const flakes = ["❄", "❅", "❆", "•"];
+  for (let i = 0; i < 28; i++) {
+    const flake = document.createElement("span");
+    flake.textContent = flakes[i % flakes.length];
+    flake.style.left = `${Math.random() * 100}%`;
+    flake.style.animationDuration = `${6 + Math.random() * 10}s`;
+    flake.style.animationDelay = `${-Math.random() * 14}s`;
+    flake.style.fontSize = `${0.55 + Math.random() * 1.1}rem`;
+    flake.style.opacity = `${0.3 + Math.random() * 0.5}`;
+    snowLayer.appendChild(flake);
+  }
+  document.body.appendChild(snowLayer);
+}
+
+function applyTheme() {
+  const theme = activeTheme();
+  const christmas = theme === "christmas";
+  document.body.classList.toggle("theme-christmas", christmas);
+  renderSnow(christmas);
+  const btn = $("#theme-btn");
+  if (btn) {
+    btn.textContent = christmas ? "🃏" : "🎄";
+    btn.title = christmas ? "Switch to the classic table" : "Switch to the Christmas theme";
+  }
+}
+
 // --- Helpers ---
 
 function esc(s) {
@@ -304,6 +349,16 @@ function renderSeasons() {
     }),
   );
   $("#season-form").classList.toggle("hidden", !isAdmin());
+
+  // Site theme controls (admin)
+  const themePanel = $("#site-theme-panel");
+  if (themePanel) {
+    themePanel.classList.toggle("hidden", !isAdmin());
+    const setting = state.siteThemeSetting || "auto";
+    themePanel.querySelectorAll(".theme-set").forEach((b) => {
+      b.classList.toggle("active", b.dataset.theme === setting);
+    });
+  }
 }
 
 // --- Players ---
@@ -345,6 +400,7 @@ function renderPlayers() {
 // --- Root render ---
 
 function render() {
+  applyTheme();
   renderUserbox();
   renderSeasonLabel();
   if (!state.me) { showAuth(); return; }
@@ -394,6 +450,27 @@ function bindEvents() {
   });
 
   document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => switchTab(t.dataset.tab)));
+
+  // Personal theme toggle (this browser only)
+  $("#theme-btn").addEventListener("click", () => {
+    const next = activeTheme() === "christmas" ? "default" : "christmas";
+    localStorage.setItem(THEME_KEY, next);
+    applyTheme();
+  });
+
+  // Site-wide theme (admin). Selecting one clears the local override.
+  document.querySelectorAll(".theme-set").forEach((btn) =>
+    btn.addEventListener("click", async () => {
+      try {
+        await api("/api/settings/theme", {
+          method: "POST",
+          body: JSON.stringify({ theme: btn.dataset.theme }),
+        });
+        localStorage.removeItem(THEME_KEY);
+        await reload();
+      } catch (err) { /* non-admins never see these buttons */ }
+    }),
+  );
 
   $("#start-game-btn").addEventListener("click", async () => {
     try {

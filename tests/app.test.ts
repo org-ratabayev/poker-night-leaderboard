@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDb } from "../src/db";
 import { parsePointsTable, pointsForPosition, DEFAULT_POINTS_TABLE } from "../src/points";
+import { seasonalTheme } from "../src/routes";
 import { createApp } from "../src/app";
 
 let dataDir: string;
@@ -356,6 +357,55 @@ describe("static assets", () => {
   test("unknown asset returns 404", async () => {
     const res = await fetchHandler(new Request("http://test.local/nope.js"));
     expect(res.status).toBe(404);
+  });
+});
+
+// --- Theme (site-wide setting + seasonal default) ---
+
+describe("theme", () => {
+  test("seasonal default: December = christmas, other months = default", () => {
+    expect(seasonalTheme(new Date("2026-12-15T12:00:00Z"))).toBe("christmas");
+    expect(seasonalTheme(new Date("2026-08-15T12:00:00Z"))).toBe("default");
+    expect(seasonalTheme(new Date("2026-01-01T00:00:00Z"))).toBe("default");
+  });
+
+  test("state exposes the resolved theme and the raw setting", async () => {
+    const res = await req("GET", "/api/state", undefined, adminCookie);
+    const body = (await res.json()) as { siteTheme: string; siteThemeSetting: string };
+    expect(["default", "christmas"]).toContain(body.siteTheme);
+    expect(body.siteThemeSetting).toBe("auto");
+  });
+
+  test("non-admin cannot change the site theme", async () => {
+    const res = await req("POST", "/api/settings/theme", { theme: "christmas" }, playerCookie);
+    expect(res.status).toBe(403);
+  });
+
+  test("admin sets the Christmas theme for everyone", async () => {
+    const res = await req("POST", "/api/settings/theme", { theme: "christmas" }, adminCookie);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { siteTheme: string };
+    expect(body.siteTheme).toBe("christmas");
+    const state = await (await req("GET", "/api/state", undefined, playerCookie)).json() as {
+      siteTheme: string;
+      siteThemeSetting: string;
+    };
+    expect(state.siteTheme).toBe("christmas");
+    expect(state.siteThemeSetting).toBe("christmas");
+  });
+
+  test("admin resets to auto (seasonal)", async () => {
+    const res = await req("POST", "/api/settings/theme", { theme: "auto" }, adminCookie);
+    expect(res.status).toBe(200);
+    const state = await (await req("GET", "/api/state", undefined, adminCookie)).json() as {
+      siteThemeSetting: string;
+    };
+    expect(state.siteThemeSetting).toBe("auto");
+  });
+
+  test("invalid theme rejected", async () => {
+    const res = await req("POST", "/api/settings/theme", { theme: "halloween" }, adminCookie);
+    expect(res.status).toBe(400);
   });
 });
 

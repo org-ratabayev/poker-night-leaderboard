@@ -178,3 +178,53 @@ tbody tr:nth-child(odd) { background: rgba(255, 255, 255, 0.02); }
 .player-item .admin-badge { color: var(--gold); font-size: 0.75rem; border: 1px solid var(--gold-dark); border-radius: 999px; padding: 0.1rem 0.5rem; }
 
 footer { text-align: center; padding: 1rem 0 2rem; max-width: 860px; margin: 0 auto; }
+
+/* --- Header actions (theme toggle) --- */
+.header-actions { display: flex; align-items: center; gap: 0.6rem; }
+#theme-btn { font-size: 1rem; padding: 0.35rem 0.55rem; line-height: 1; }
+
+/* --- Christmas theme --- */
+body.theme-christmas {
+  --bg: #071410;
+  --panel: #0e2119;
+  --panel2: #14291f;
+  --border: #254433;
+  --gold: #ffd97a;
+  --red: #c8102e;
+  background: radial-gradient(ellipse at 50% -25%, #143d28 0%, #071410 65%) fixed, #071410;
+}
+body.theme-christmas .topbar {
+  background: linear-gradient(180deg, #0f2f22, #071410);
+  border-bottom-color: var(--red);
+}
+body.theme-christmas h1 { color: #ffe9b0; }
+body.theme-christmas .brand-icon::after { content: " 🎄"; }
+body.theme-christmas .season-label { color: var(--gold); }
+body.theme-christmas button.primary { background: #b3121b; color: #fff5e6; }
+body.theme-christmas button.primary:hover { background: #d31c25; }
+body.theme-christmas .tab.active,
+body.theme-christmas .auth-tab.active { background: #b3121b; border-color: #b3121b; }
+body.theme-christmas .champion-banner { border-color: var(--red); }
+body.theme-christmas .live-banner { border-color: var(--gold); }
+body.theme-christmas .admin-badge { color: var(--gold); border-color: var(--gold); }
+body.theme-christmas footer::after { content: " · 🎅 Merry Christmas!"; color: var(--gold); }
+
+/* --- Snowfall --- */
+.snow {
+  position: fixed; inset: 0; overflow: hidden;
+  pointer-events: none; z-index: 50;
+}
+.snow span {
+  position: absolute; top: -3rem; color: #eaf4ff;
+  animation-name: snowfall;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  text-shadow: 0 0 6px rgba(255, 255, 255, 0.45);
+}
+@keyframes snowfall {
+  0% { transform: translateY(0) rotate(0deg); }
+  100% { transform: translateY(115vh) rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .snow { display: none; }
+}

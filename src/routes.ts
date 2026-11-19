@@ -14,6 +14,7 @@
  */
 import type { Database } from "bun:sqlite";
 import type { PlayerRow, GameRow } from "./db";
+import { clearSetting, getSetting, setSetting } from "./db";
 import { pointsForPosition } from "./points";
 import {
   clearSessionCookie,
@@ -171,6 +172,37 @@ function publicPlayer(p: PlayerRow): unknown {
   return { id: p.id, name: p.name, isAdmin: p.is_admin === 1, joinedAt: p.created_at };
 }
 
+// --- Theme ---
+
+export type Theme = "default" | "christmas";
+
+/** December → the Christmas theme is the default for everyone. */
+export function seasonalTheme(now = new Date()): Theme {
+  return now.getUTCMonth() === 11 ? "christmas" : "default";
+}
+
+export function siteTheme(db: Database): Theme {
+  const stored = getSetting(db, "theme", "");
+  if (stored === "christmas" || stored === "default") return stored;
+  return seasonalTheme();
+}
+
+/** POST /api/settings/theme { theme: "default" | "christmas" | "auto" } — admin. */
+export async function handleSetTheme(ctx: Ctx, req: Request): Promise<Response> {
+  const auth = await requireAdmin(ctx, req);
+  if (auth instanceof Response) return auth;
+  const body = (await req.json().catch(() => null)) as { theme?: unknown } | null;
+  const theme = typeof body?.theme === "string" ? body.theme : "";
+  if (theme === "auto") {
+    clearSetting(ctx.db, "theme");
+  } else if (theme === "christmas" || theme === "default") {
+    setSetting(ctx.db, "theme", theme);
+  } else {
+    return error('theme must be "default", "christmas" or "auto"');
+  }
+  return json({ ok: true, siteTheme: siteTheme(ctx.db) });
+}
+
 // --- Route handlers ---
 
 export async function handleHealth(): Promise<Response> {
@@ -218,6 +250,8 @@ export async function handleState(ctx: Ctx, req: Request): Promise<Response> {
     pointsTable: ctx.points,
     today,
     todayHasGame,
+    siteTheme: siteTheme(ctx.db),
+    siteThemeSetting: getSetting(ctx.db, "theme", "auto"),
   });
 }
 

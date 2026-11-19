@@ -60,6 +60,23 @@ function tableColumns(db: Database, table: string): string[] {
   return (db.query(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name);
 }
 
+// --- Key/value settings ---
+
+export function getSetting(db: Database, key: string, fallback: string): string {
+  const row = db.query("SELECT value FROM settings WHERE key = ?").get(key) as { value: string } | null;
+  return row?.value ?? fallback;
+}
+
+export function setSetting(db: Database, key: string, value: string): void {
+  db.query(
+    "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+  ).run(key, value);
+}
+
+export function clearSetting(db: Database, key: string): void {
+  db.query("DELETE FROM settings WHERE key = ?").run(key);
+}
+
 function migrate(db: Database): void {
   db.exec("PRAGMA foreign_keys = OFF;");
 
@@ -94,6 +111,10 @@ function migrate(db: Database): void {
       position INTEGER,
       points INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (game_id, player_id)
+    );
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
     );
   `);
 
