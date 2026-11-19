@@ -320,6 +320,45 @@ describe("games: live tournament", () => {
   });
 });
 
+// --- Static assets: cache-busting contract ---
+
+describe("static assets", () => {
+  test("index.html is never cached and carries versioned asset URLs", async () => {
+    const res = await fetchHandler(new Request("http://test.local/"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const html = await res.text();
+    expect(html).toMatch(/\/app\.js\?v=[a-z0-9]+/);
+    expect(html).toMatch(/\/style\.css\?v=[a-z0-9]+/);
+    // placeholders must always be substituted
+    expect(html).not.toContain("__V_APP__");
+    expect(html).not.toContain("__V_CSS__");
+  });
+
+  test("versioned assets are immutable-cacheable and served", async () => {
+    const js = await fetchHandler(new Request("http://test.local/app.js?v=abc123"));
+    expect(js.status).toBe(200);
+    expect(js.headers.get("cache-control")).toContain("immutable");
+    expect((await js.text()).length).toBeGreaterThan(100);
+
+    const css = await fetchHandler(new Request("http://test.local/style.css?v=abc123"));
+    expect(css.status).toBe(200);
+    expect(css.headers.get("cache-control")).toContain("immutable");
+  });
+
+  test("the same asset version is stable for identical content", async () => {
+    const a = await (await fetchHandler(new Request("http://test.local/"))).text();
+    const b = await (await fetchHandler(new Request("http://test.local/"))).text();
+    const version = a.match(/\/app\.js\?v=([a-z0-9]+)/)![1];
+    expect(b).toContain(`/app.js?v=${version}`);
+  });
+
+  test("unknown asset returns 404", async () => {
+    const res = await fetchHandler(new Request("http://test.local/nope.js"));
+    expect(res.status).toBe(404);
+  });
+});
+
 // --- Seasons ---
 
 describe("seasons", () => {
